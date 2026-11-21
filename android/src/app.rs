@@ -200,7 +200,7 @@ impl App {
                 }
             }
             Event::Toast(m) => self.message = Some(m),
-            Event::Cancelled { .. } | Event::FriendOnline(_) | Event::FriendRequest(_) => {}
+            Event::Cancelled { .. } | Event::FriendOnline(_) | Event::FriendRequest(_) | Event::Message { .. } => {}
         }
     }
 

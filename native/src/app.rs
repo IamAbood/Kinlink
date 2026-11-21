@@ -118,6 +118,9 @@ pub struct App {
     page: Page,
     /// Custom status being typed (None = not editing).
     status_edit: Option<String>,
+    /// Friend whose chat window is open, and what's being typed.
+    chat_with: Option<Pub>,
+    chat_draft: String,
     /// Session history: finished sessions (newest last) and the ones running now.
     history: Vec<HistEntry>,
     live_sessions: std::collections::HashMap<String, (String, Instant)>,
@@ -191,6 +194,8 @@ impl App {
             rename_text: String::new(),
             page: Page::Friends,
             status_edit: None,
+            chat_with: None,
+            chat_draft: String::new(),
             history: load_history(),
             live_sessions: Default::default(),
             rename_err: None,
@@ -457,6 +462,14 @@ impl App {
                 }
             }
             Event::FriendRequest(id) => crate::notify::toast(&tlf("{} wants to be friends", &[&id]), &tl("Open Kinlink to accept.")),
+            Event::Message { from, text } => {
+                let open_here = self.chat_with == Some(from) && self.window().is_some_and(|w| w.has_focus());
+                if open_here {
+                    sig.mark_read(&from);
+                } else if let Some(f) = sig.friend(&from) {
+                    crate::notify::toast(&f.display(), &text);
+                }
+            }
         }
     }
 
@@ -1236,7 +1249,7 @@ impl App {
                 });
                 ui.add_space(14.0);
                 ui.spacing_mut().item_spacing.y = 4.0;
-                if t::nav(ui, Icon::Friends, &tr("Friends"), self.page == Page::Friends, Some(sig.incoming().len())).clicked() {
+                if t::nav(ui, Icon::Friends, &tr("Friends"), self.page == Page::Friends, Some(sig.incoming().len() + sig.total_unread() as usize)).clicked() {
                     go = Some(Page::Friends);
                 }
                 if t::nav(ui, Icon::Monitor, &tr("This PC"), self.page == Page::Pc, Some(guests)).clicked() {
@@ -1849,6 +1862,7 @@ impl App {
             h.move_pad(i, up);
         }
         self.nettest_ui(root.ctx());
+        self.friend_chat_ui(root.ctx(), &sig);
     }
 
     fn friend_rows(&mut self, ui: &mut egui::Ui, sig: &Signal, friends: Vec<(Friend, bool)>, connect: &mut Option<Friend>) {
@@ -1875,6 +1889,16 @@ impl App {
                     let open = self.expanded == Some(f.public);
                     if t::icon_button(ui, Icon::More, &tr("Permissions, nickname, remove"), open).clicked() {
                         self.expanded = if open { None } else { Some(f.public) };
+                    }
+                    let unread = sig.unread(&f.public);
+                    let r = t::icon_button(ui, Icon::Chat, &tr("Message"), self.chat_with == Some(f.public));
+                    if unread > 0 {
+                        let c = egui::pos2(r.rect.max.x - 3.0, r.rect.min.y + 3.0);
+                        ui.painter().circle_filled(c, 8.0, t::ACCENT);
+                        ui.painter().text(c, egui::Align2::CENTER_CENTER, unread.min(99).to_string(), egui::FontId::new(10.0, t::bold()), Color32::WHITE);
+                    }
+                    if r.clicked() {
+                        self.chat_with = if self.chat_with == Some(f.public) { None } else { Some(f.public) };
                     }
                     let busy = self.client.is_some() || self.outgoing.is_some();
                     if online {
@@ -2482,5 +2506,96 @@ impl App {
             }
         }
         ctx.request_repaint_after(Duration::from_millis(500));
+    }
+}
+
+impl App {
+    /// Chat with one friend, outside any session.
+    fn friend_chat_ui(&mut self, ctx: &egui::Context, sig: &Signal) {
+        use crate::theme as t;
+        let Some(with) = self.chat_with else { return };
+        let Some(f) = sig.friend(&with) else {
+            self.chat_with = None;
+            return;
+        };
+        sig.mark_read(&with);
+        let msgs = sig.messages(&with);
+        let online = sig.friends().iter().any(|(x, on)| x.public == with && *on);
+        let mut close = false;
+        let mut send = false;
+        egui::Window::new("friend chat")
+            .id(egui::Id::new("friend_chat"))
+            .title_bar(false)
+            .resizable(false)
+            .frame(egui::Frame::NONE.fill(t::SIDEBAR).stroke(egui::Stroke::new(1.0, t::ACCENT_LINE)).corner_radius(16.0).inner_margin(egui::Margin::same(14)).shadow(egui::Shadow { offset: [0, 14], blur: 40, spread: 0, color: Color32::from_black_alpha(140) }))
+            .anchor(egui::Align2::RIGHT_BOTTOM, [-20.0, -44.0])
+            .show(ctx, |ui| {
+                ui.set_width(330.0);
+                ui.horizontal(|ui| {
+                    t::avatar(ui, &f.display(), Some(online), 34.0);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.label(RichText::new(crate::rtl::show(&f.display())).font(egui::FontId::new(14.5, t::bold())));
+                        ui.label(RichText::new(if online { tr("Online") } else { tr("Offline · gets it when back online") }).size(11.5).color(if online { t::MINT_SOFT } else { t::MUTED }));
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if t::icon_button(ui, t::Icon::Close, &tr("Close"), false).clicked() {
+                            close = true;
+                        }
+                    });
+                });
+                ui.separator();
+                egui::ScrollArea::vertical().id_salt("fchat").max_height(300.0).min_scrolled_height(300.0).stick_to_bottom(true).show(ui, |ui| {
+                    ui.set_width(318.0);
+                    if msgs.is_empty() {
+                        ui.add_space(20.0);
+                        ui.vertical_centered(|ui| ui.label(RichText::new(tr("No messages yet. Say hi!")).color(t::MUTED)));
+                    }
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                    for m in msgs.iter().rev().take(200).rev() {
+                        let layout = if m.mine { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
+                        ui.with_layout(layout, |ui| {
+                            egui::Frame::NONE
+                                .fill(if m.mine { t::ACCENT } else { t::HOVER })
+                                .corner_radius(if m.mine { egui::CornerRadius { nw: 12, ne: 12, sw: 12, se: 4 } } else { egui::CornerRadius { nw: 12, ne: 12, sw: 4, se: 12 } })
+                                .inner_margin(egui::Margin::symmetric(10, 6))
+                                .show(ui, |ui| {
+                                    ui.set_max_width(240.0);
+                                    ui.vertical(|ui| {
+                                        ui.spacing_mut().item_spacing.y = 2.0;
+                                        ui.label(RichText::new(crate::rtl::show(&m.text)).color(Color32::WHITE));
+                                        let ago = duration_text(now.saturating_sub(m.ts));
+                                        let meta = if !m.mine { ago } else if m.delivered { trf("{} · delivered", &[&ago]) } else { trf("{} · sent", &[&ago]) };
+                                        ui.label(RichText::new(meta).size(10.0).color(Color32::from_white_alpha(150)));
+                                    });
+                                });
+                        });
+                    }
+                });
+                ui.horizontal(|ui| {
+                    let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let r = ui.add(egui::TextEdit::singleline(&mut self.chat_draft).hint_text(tr("Type a message")).desired_width(250.0).margin(egui::vec2(10.0, 8.0)));
+                    if ui.ctx().memory(|m| m.focused().is_none()) {
+                        r.request_focus(); // type right away when the chat opens
+                    }
+                    if (r.has_focus() || r.lost_focus()) && enter {
+                        send = true;
+                        r.request_focus();
+                    }
+                    if t::primary(ui, &tr("Send"), None, !self.chat_draft.trim().is_empty()).clicked() {
+                        send = true;
+                    }
+                });
+                if crate::rtl::has_rtl(&self.chat_draft) {
+                    ui.label(crate::rtl::show(&self.chat_draft));
+                }
+            });
+        if send && !self.chat_draft.trim().is_empty() {
+            sig.send_message(&with, &self.chat_draft);
+            self.chat_draft.clear();
+        }
+        if close {
+            self.chat_with = None;
+        }
     }
 }

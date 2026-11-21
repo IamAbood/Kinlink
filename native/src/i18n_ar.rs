@@ -253,6 +253,14 @@ pub fn get(en: &str) -> Option<&'static str> {
         "Saved to Downloads\\Kinlink if you accept" => "سيُحفظ في Downloads\\Kinlink إذا قبلت",
         "Kinlink {} is available" => "Kinlink {} متاح الآن",
         "Download" => "تنزيل",
+        // ---- 0.19 chat
+        "Message" => "رسالة",
+        "Offline · gets it when back online" => "غير متصل · تصله عند عودته",
+        "No messages yet. Say hi!" => "لا توجد رسائل بعد. قل مرحبًا!",
+        "{} · delivered" => "{} · تم التسليم",
+        "{} · sent" => "{} · تم الإرسال",
+        "Type a message" => "اكتب رسالة",
+        "Send" => "إرسال",
         _ => return None,
     })
 }

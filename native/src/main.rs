@@ -587,6 +587,13 @@ fn signaltest() -> i32 {
         return 1;
     }
     let bpub = a.friends()[0].0.public;
+    a.send_message(&bpub, "hello from A");
+    if !wait("B receives A's chat message", 20, &|| b.messages(&apub).iter().any(|x| !x.mine && x.text == "hello from A")) {
+        return 1;
+    }
+    if !wait("A sees it delivered", 20, &|| a.messages(&bpub).iter().any(|x| x.mine && x.delivered)) {
+        return 1;
+    }
     a.send(&bpub, Sig::Connect { req: 9, eph: [1; 32], addrs: vec!["203.0.113.1:5000".parse().unwrap()] });
     let got = std::sync::Mutex::new(false);
     if !wait("B gets connect request", 20, &|| {

@@ -64,6 +64,21 @@ pub enum Sig {
     Renamed { name: String },
     /// My status line ("" = available, "Busy", "Playing FIFA", ...).
     Status { text: String },
+    /// A chat message outside sessions; acked so the sender knows it arrived.
+    Message { id: u64, text: String, ts: u64 },
+    MessageAck { id: u64 },
+}
+
+/// One chat message with a friend.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ChatMsg {
+    pub id: u64,
+    pub mine: bool,
+    pub text: String,
+    /// Unix seconds when it was written.
+    pub ts: u64,
+    /// Mine: the friend's app confirmed it. Theirs: always true.
+    pub delivered: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -89,6 +104,8 @@ pub enum Event {
     FriendOnline(Pub),
     /// Someone sent a friend request.
     FriendRequest(String),
+    /// A friend sent a chat message.
+    Message { from: Pub, text: String },
 }
 
 /// Writes a friends file directly (test profiles).
@@ -130,6 +147,9 @@ struct State {
     up: Vec<bool>,
     /// Friends' status lines.
     status: HashMap<Pub, String>,
+    /// Chat history per friend (oldest first) and unread counts.
+    messages: HashMap<Pub, Vec<ChatMsg>>,
+    unread: HashMap<Pub, u32>,
 }
 
 struct Inner {
@@ -191,6 +211,8 @@ impl Signal {
             up: vec![false; BROKERS.len()],
             ..Default::default()
         };
+        let messages: Vec<(Pub, Vec<ChatMsg>)> = store.as_ref().and_then(|p| std::fs::read_to_string(p.with_file_name("messages.json")).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let st = State { messages: messages.into_iter().collect(), ..st };
         let s = Signal(Arc::new(Inner {
             me,
             store,
@@ -260,6 +282,48 @@ impl Signal {
     fn event(&self, e: Event) {
         self.0.events.lock().unwrap().push_back(e);
         (self.0.wake)();
+    }
+
+    fn save_messages(&self) {
+        if let Some(p) = &self.0.store {
+            let all: Vec<(Pub, Vec<ChatMsg>)> = self.0.st.lock().unwrap().messages.iter().map(|(k, v)| (*k, v.clone())).collect();
+            let _ = std::fs::write(p.with_file_name("messages.json"), serde_json::to_string(&all).unwrap_or_default());
+        }
+    }
+
+    /// Chat history with a friend, oldest first.
+    pub fn messages(&self, with: &Pub) -> Vec<ChatMsg> {
+        self.0.st.lock().unwrap().messages.get(with).cloned().unwrap_or_default()
+    }
+
+    /// Sends a chat message (kept and re-sent until the friend's app confirms it).
+    pub fn send_message(&self, to: &Pub, text: &str) {
+        let text: String = text.trim().chars().take(2000).collect();
+        if text.is_empty() {
+            return;
+        }
+        let m = ChatMsg { id: rand::random(), mine: true, text: text.clone(), ts: now_s(), delivered: false };
+        let (id, ts) = (m.id, m.ts);
+        {
+            let mut st = self.0.st.lock().unwrap();
+            let list = st.messages.entry(*to).or_default();
+            list.push(m);
+            if list.len() > 500 {
+                list.remove(0);
+            }
+        }
+        self.save_messages();
+        self.send(to, Sig::Message { id, text, ts });
+    }
+
+    pub fn unread(&self, with: &Pub) -> u32 {
+        self.0.st.lock().unwrap().unread.get(with).copied().unwrap_or(0)
+    }
+    pub fn total_unread(&self) -> u32 {
+        self.0.st.lock().unwrap().unread.values().sum()
+    }
+    pub fn mark_read(&self, with: &Pub) {
+        self.0.st.lock().unwrap().unread.remove(with);
     }
 
     fn save(&self) {
@@ -595,6 +659,38 @@ impl Signal {
             Sig::Connect { req, eph, addrs } => self.event(Event::IncomingConnect { from, req, eph, addrs }),
             s @ (Sig::ConnectOk { .. } | Sig::ConnectNo { .. }) => self.event(Event::ConnectReply { from, sig: s }),
             Sig::Cancel { req } => self.event(Event::Cancelled { from, req }),
+            Sig::Message { id, text, ts } => {
+                self.send(&from, Sig::MessageAck { id });
+                let text: String = text.chars().take(2000).collect();
+                let new = {
+                    let mut st = self.0.st.lock().unwrap();
+                    let list = st.messages.entry(from).or_default();
+                    if list.iter().any(|m| m.id == id && !m.mine) {
+                        false // a resend we already have
+                    } else {
+                        list.push(ChatMsg { id, mine: false, text: text.clone(), ts, delivered: true });
+                        if list.len() > 500 {
+                            list.remove(0);
+                        }
+                        *st.unread.entry(from).or_default() += 1;
+                        true
+                    }
+                };
+                if new {
+                    self.save_messages();
+                    self.event(Event::Message { from, text });
+                }
+            }
+            Sig::MessageAck { id } => {
+                let changed = {
+                    let mut st = self.0.st.lock().unwrap();
+                    st.messages.get_mut(&from).and_then(|l| l.iter_mut().find(|m| m.mine && m.id == id && !m.delivered)).map(|m| m.delivered = true).is_some()
+                };
+                if changed {
+                    self.save_messages();
+                    (self.0.wake)();
+                }
+            }
             Sig::Status { text } => {
                 let text: String = text.chars().filter(|c| !c.is_control()).take(40).collect();
                 self.0.st.lock().unwrap().status.insert(from, text);
@@ -630,6 +726,14 @@ impl Signal {
             thread::sleep(Duration::from_millis(500));
             if last_ping.elapsed() > Duration::from_secs(25) {
                 last_ping = Instant::now();
+                // Re-send chat messages that haven't been confirmed (friend was offline).
+                let resend: Vec<(Pub, ChatMsg)> = {
+                    let st = self.0.st.lock().unwrap();
+                    st.messages.iter().flat_map(|(p, l)| l.iter().filter(|m| m.mine && !m.delivered).rev().take(20).map(move |m| (*p, m.clone()))).collect()
+                };
+                for (p, m) in resend {
+                    self.send(&p, Sig::Message { id: m.id, text: m.text, ts: m.ts });
+                }
                 let pubs: Vec<Pub> = self.0.st.lock().unwrap().friends.iter().map(|f| f.public).collect();
                 for p in pubs {
                     self.send(&p, Sig::Ping { reply: false });
