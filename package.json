@@ -1,0 +1,12 @@
+{
+  "name": "parsec-clone",
+  "version": "0.2.1-beta",
+  "private": true,
+  "scripts": {
+    "start": "tauri dev",
+    "dist": "tauri build --no-bundle && node -e \"const v=require('./package.json').version;require('fs').mkdirSync('dist',{recursive:true});require('fs').copyFileSync('src-tauri/target/release/parsec-clone.exe','dist/ParsecClone-'+v+'.exe');console.log('dist/ParsecClone-'+v+'.exe')\""
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.6"
+  }
+}

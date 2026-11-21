@@ -1,0 +1,80 @@
+# Builds Kinlink.exe on GitHub's Windows machines from the code in this repository.
+# - Every push to main: build + unit tests, exe kept as a downloadable artifact.
+# - Pushing a tag like v0.16.1-beta: also publishes a GitHub Release with Kinlink.exe and
+#   "sha256: <hash>" in the notes (the in-app updater checks that hash before installing).
+# Code signing (SignPath) plugs in at the marked step once the project is approved.
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/target
+          key: cargo-${{ hashFiles('native/Cargo.lock') }}
+
+      - name: Unit tests
+        run: cargo test --release --manifest-path native/Cargo.toml
+
+      - name: Build
+        run: cargo build --release --manifest-path native/Cargo.toml
+
+      - name: Collect exe
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item native/target/release/pclone.exe out/Kinlink.exe
+
+      - name: Upload unsigned exe
+        id: unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kinlink-unsigned
+          path: out/Kinlink.exe
+
+      # ---- Code signing (enable after SignPath approves the project) -------------------------
+      # Fill in the ids SignPath gives you and add the SIGNPATH_API_TOKEN repository secret.
+      # - name: Sign with SignPath
+      #   uses: signpath/github-action-submit-signing-request@v1
+      #   with:
+      #     api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+      #     organization-id: "<from SignPath>"
+      #     project-slug: "kinlink"
+      #     signing-policy-slug: "release-signing"
+      #     github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+      #     wait-for-completion: true
+      #     output-artifact-directory: out
+      # -----------------------------------------------------------------------------------------
+
+      - name: Release notes with hash
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash out/Kinlink.exe -Algorithm SHA256).Hash.ToLower()
+          "Kinlink $env:GITHUB_REF_NAME`n`nsha256: $hash" | Out-File -Encoding utf8 notes.md
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/Kinlink.exe
+          body_path: notes.md
+          prerelease: ${{ contains(github.ref_name, 'beta') }}

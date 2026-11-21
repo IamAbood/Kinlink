@@ -1,0 +1,174 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Parsec Clone</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #111; color: #eee; font: 15px system-ui, sans-serif; }
+  #home { max-width: 420px; margin: 80px auto; display: grid; gap: 28px; }
+  .card { background: #1c1c1c; border-radius: 10px; padding: 20px; display: grid; gap: 10px; }
+  h2 { margin: 0; font-size: 16px; color: #aaa; font-weight: 500; }
+  input[type=text] { font: 28px monospace; letter-spacing: 3px; padding: 8px; background: #000; color: #fff; border: 1px solid #333; border-radius: 6px; }
+  button { padding: 10px; font-size: 15px; border: 0; border-radius: 6px; background: #3b82f6; color: #fff; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .status { color: #8f8; min-height: 1.2em; }
+  #view { display: none; position: fixed; inset: 0; background: #000; }
+  #video { width: 100%; height: 100%; object-fit: contain; cursor: none; outline: none; }
+  #bar { position: fixed; top: 0; left: 50%; transform: translate(-50%, -85%); transition: transform .15s; background: #222; padding: 6px 12px; border-radius: 0 0 8px 8px; }
+  #bar:hover { transform: translate(-50%, 0); }
+</style>
+</head>
+<body>
+<div id="home">
+  <div class="card">
+    <h2>Let others control this PC</h2>
+    <input type="text" id="myCode" spellcheck="false">
+    <label><input type="checkbox" id="autoHost"> Start hosting when the app opens</label>
+    <button id="hostBtn">Start hosting</button>
+    <div class="status" id="hostStatus"></div>
+  </div>
+  <div class="card">
+    <h2>Control a remote PC</h2>
+    <input type="text" id="remoteCode" placeholder="code" spellcheck="false">
+    <button id="connectBtn">Connect</button>
+    <div class="status" id="clientStatus"></div>
+  </div>
+</div>
+
+<div id="view">
+  <video id="video" autoplay playsinline tabindex="0"></video>
+  <div id="bar"><button id="leaveBtn">Disconnect</button></div>
+</div>
+
+<script src="peerjs.min.js"></script>
+<script>
+const PeerCtor = window.Peer || window.peerjs.Peer;
+const PREFIX = 'pclone-v1-';                          // namespace on the shared PeerJS server
+const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+const $ = (id) => document.getElementById(id);
+const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+                set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+
+// ---------- HOST ----------
+let inputQueue = Promise.resolve();
+$('myCode').value = store.get('code') || String(Math.floor(100000000 + Math.random() * 900000000));
+$('autoHost').checked = store.get('autoHost') === '1';
+$('autoHost').onchange = () => store.set('autoHost', $('autoHost').checked ? '1' : '0');
+
+async function startHosting() {
+  const code = norm($('myCode').value);
+  if (code.length < 4) return ($('hostStatus').textContent = 'Code must be at least 4 letters/digits');
+  store.set('code', code);
+  $('hostBtn').disabled = $('myCode').disabled = true;
+  $('hostStatus').textContent = 'Starting...';
+
+  // Capture runs alongside registration, so the code is findable even if capture is slow or fails.
+  const streamP = Promise.race([
+    navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 60 }, audio: true }),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('screen capture did not start within 15s')), 15000)),
+  ]);
+  let captureError = null;
+  streamP.catch((e) => { captureError = e.message; $('hostStatus').textContent = `Code ${code} registered, but screen capture failed: ${e.message}`; });
+
+  const peer = new PeerCtor(PREFIX + code);
+  peer.on('open', () => { if (!captureError) $('hostStatus').textContent = `Hosting. Code: ${code}`; });
+  peer.on('disconnected', () => setTimeout(() => !peer.destroyed && peer.reconnect(), 3000));
+  peer.on('error', (err) => {
+    $('hostStatus').textContent = err.type === 'unavailable-id' ? 'Code already in use, pick another and restart' : 'Error: ' + err.type;
+    if (err.type === 'unavailable-id') { $('hostBtn').disabled = $('myCode').disabled = false; peer.destroy(); }
+  });
+  peer.on('connection', (conn) => {
+    conn.on('open', async () => {
+      let stream;
+      try { stream = await streamP; } catch (e) { conn.send({ t: 'error', msg: 'Host could not capture its screen: ' + e.message }); return; }
+      $('hostStatus').textContent = `Remote user connected (code ${code})`;
+      const call = peer.call(conn.peer, stream);
+      const pc = call.peerConnection;
+      pc.addEventListener('connectionstatechange', () => {
+        if (pc.connectionState !== 'connected') return;
+        for (const s of pc.getSenders()) {
+          if (s.track?.kind !== 'video') continue;
+          const p = s.getParameters();
+          if (!p.encodings?.length) p.encodings = [{}];
+          p.encodings[0].maxBitrate = 12_000_000;      // ~12 Mbps cap; lower if host upload is weak
+          p.encodings[0].maxFramerate = 60;
+          s.setParameters(p).catch(console.warn);
+        }
+      });
+      conn.on('close', () => { call.close(); $('hostStatus').textContent = `Hosting. Code: ${code}`; });
+    });
+    // Chain calls: parallel invokes can reorder (e.g. mouse "up" before "down").
+    conn.on('data', (ev) => (inputQueue = inputQueue.then(() => window.__TAURI__.core.invoke('input', { ev })).catch(console.warn)));
+  });
+}
+$('hostBtn').onclick = () => startHosting().catch((e) => ($('hostStatus').textContent = 'Error: ' + e.message));
+if ($('autoHost').checked) $('hostBtn').click();
+
+// ---------- CLIENT ----------
+$('remoteCode').value = store.get('lastRemote') || '';
+$('remoteCode').onkeydown = (e) => { if (e.key === 'Enter') $('connectBtn').click(); }; // must not return false: that cancels the keypress
+$('connectBtn').onclick = () => {
+  const code = norm($('remoteCode').value);
+  if (!code) return;
+  store.set('lastRemote', code);
+  $('connectBtn').disabled = true;
+  $('clientStatus').textContent = 'Connecting...';
+
+  const peer = new PeerCtor();
+  const fail = (msg) => { $('clientStatus').textContent = msg; $('connectBtn').disabled = false; peer.destroy(); };
+  const timer = setTimeout(() => fail('Timed out. Is the host online and hosting?'), 20000);
+  peer.on('error', (err) => fail(err.type === 'peer-unavailable' ? 'No PC is hosting with that code' : 'Error: ' + err.type));
+
+  peer.on('open', () => {
+    const conn = peer.connect(PREFIX + code, { reliable: true, serialization: 'json' });
+    peer.on('call', (call) => {
+      call.answer();
+      call.on('stream', (stream) => {             // fires per track (video + audio); only set up once
+        if ($('video').srcObject) return;
+        clearTimeout(timer);
+        for (const r of call.peerConnection.getReceivers()) r.playoutDelayHint = 0; // no extra buffering
+        $('video').srcObject = stream;
+        $('home').style.display = 'none';
+        $('view').style.display = 'block';
+        $('video').focus();
+        attachInput(conn);
+      });
+    });
+    conn.on('data', (d) => d?.t === 'error' && (clearTimeout(timer), fail(d.msg)));
+    conn.on('close', () => $('video').srcObject && location.reload()); // only reset once a session was live
+    $('leaveBtn').onclick = () => { conn.close(); location.reload(); };
+  });
+};
+
+function attachInput(conn) {
+  const v = $('video');
+  const send = (ev) => conn.open && conn.send(ev);
+  const held = new Set();
+
+  // Map mouse position to 0..1 of the actual picture (object-fit: contain adds black bars).
+  function pos(e) {
+    const r = v.getBoundingClientRect();
+    const scale = Math.min(r.width / v.videoWidth, r.height / v.videoHeight);
+    const w = v.videoWidth * scale, h = v.videoHeight * scale;
+    const x = (e.clientX - r.left - (r.width - w) / 2) / w;
+    const y = (e.clientY - r.top - (r.height - h) / 2) / h;
+    return { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) };
+  }
+  const BTN = ['left', 'middle', 'right'];
+
+  v.addEventListener('mousemove', (e) => v.videoWidth && send({ t: 'move', ...pos(e) }));
+  v.addEventListener('mousedown', (e) => { v.focus(); send({ t: 'move', ...pos(e) }); send({ t: 'down', b: BTN[e.button] || 'left' }); });
+  v.addEventListener('mouseup', (e) => send({ t: 'up', b: BTN[e.button] || 'left' }));
+  v.addEventListener('contextmenu', (e) => e.preventDefault());
+  v.addEventListener('wheel', (e) => { e.preventDefault(); send({ t: 'wheel', dy: e.deltaY }); }, { passive: false });
+
+  // keyCode = Windows virtual-key code, which the Rust side injects directly.
+  window.addEventListener('keydown', (e) => { e.preventDefault(); held.add(e.keyCode); send({ t: 'kd', k: e.keyCode }); });
+  window.addEventListener('keyup', (e) => { e.preventDefault(); held.delete(e.keyCode); send({ t: 'ku', k: e.keyCode }); });
+  // Release everything if this window loses focus, so keys don't get stuck down on the host.
+  window.addEventListener('blur', () => { for (const k of held) send({ t: 'ku', k }); held.clear(); });
+}
+</script>
+</body>
+</html>
