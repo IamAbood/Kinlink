@@ -80,7 +80,7 @@ impl Voice {
         std::thread::spawn(move || {
             let _out = (|| -> anyhow::Result<cpal::Stream> {
                 let dev = cpal::default_host().default_output_device().ok_or_else(|| anyhow::anyhow!("no speakers"))?;
-                let cfg = dev.default_output_config()?;
+                let cfg = crate::audio::f32_output_config(&dev)?;
                 *i2.out_fmt.lock().unwrap() = Some((cfg.sample_rate() as f64, cfg.channels() as usize));
                 let i3 = i2.clone();
                 let s = dev.build_output_stream(

@@ -57,6 +57,7 @@ pub struct App {
     message: Option<String>,
     menu: bool,
     keyboard: bool,
+    muted: bool,
     cursor: (f32, f32),
     g: Gesture,
 }
@@ -78,6 +79,7 @@ impl App {
             message: None,
             menu: false,
             keyboard: false,
+            muted: false,
             cursor: (0.5, 0.5),
             g: Gesture::default(),
         };
@@ -575,14 +577,30 @@ or have permission to use.").size(11.5).color(t::MUTED));
                     });
                 });
                 let w = (320.0 - 6.0) / 2.0;
+                let mic = c.mic_on();
                 ui.horizontal(|ui| {
                     if t::tile(ui, Icon::Keyboard, if self.keyboard { "Hide keyboard" } else { "Keyboard" }, self.keyboard.then_some(t::ACCENT_SOFT), w).clicked() {
                         act = Some("kb");
+                    }
+                    if t::tile(ui, Icon::Mic, if mic { "Mic on" } else { "Mic off" }, mic.then_some(t::MINT), w).clicked() {
+                        act = Some("mic");
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if t::tile(ui, Icon::Hide, if self.muted { "Sound off" } else { "Sound on" }, (!self.muted).then_some(t::ACCENT_SOFT), w).clicked() {
+                        act = Some("sound");
                     }
                     if t::tile(ui, Icon::Close, "Disconnect", Some(t::DANGER), w).clicked() {
                         act = Some("bye");
                     }
                 });
+                let (talking, mic_err) = c.voice_status();
+                if !talking.is_empty() {
+                    ui.label(RichText::new(format!("Talking: {}", talking.join(", "))).color(t::MINT_SOFT));
+                }
+                if let Some(e) = mic_err {
+                    ui.colored_label(t::DANGER, e);
+                }
                 let kw = (320.0 - 3.0 * 6.0) / 4.0;
                 for row in [["Esc", "Tab", "Enter", "Back"], ["Win", "Alt+Tab", "Copy", "Paste"], ["Left", "Up", "Down", "Right"]] {
                     ui.horizontal(|ui| {
@@ -602,6 +620,23 @@ or have permission to use.").size(11.5).color(t::MUTED));
         match act {
             Some("menu") => self.menu = !self.menu,
             Some("kb") => self.set_keyboard(!self.keyboard),
+            Some("mic") => {
+                if let Some(c) = &self.client {
+                    if c.mic_on() {
+                        c.set_mic(false);
+                    } else if crate::mic::ensure_mic() {
+                        c.set_mic(true); // use headphones, or the PC hears itself
+                    } else {
+                        self.message = Some("Allow the microphone, then tap Mic again".into());
+                    }
+                }
+            }
+            Some("sound") => {
+                self.muted = !self.muted;
+                if let Some(c) = &self.client {
+                    c.set_volume(if self.muted { 0 } else { 100 });
+                }
+            }
             Some("bye") => self.disconnect(None),
             Some("Esc") => self.key(0x01, false),
             Some("Tab") => self.key(0x0F, false),

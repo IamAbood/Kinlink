@@ -90,13 +90,25 @@ impl PlayBuf {
     }
 }
 
+/// An f32 output format: the default if it is f32, else the closest f32 one the device offers
+/// (phones often default to 16-bit).
+pub fn f32_output_config(dev: &cpal::Device) -> Result<cpal::SupportedStreamConfig> {
+    let def = dev.default_output_config()?;
+    if def.sample_format() == cpal::SampleFormat::F32 {
+        return Ok(def);
+    }
+    let want = def.sample_rate();
+    dev.supported_output_configs()?
+        .filter(|c| c.sample_format() == cpal::SampleFormat::F32)
+        .min_by_key(|c| c.channels().abs_diff(def.channels()))
+        .map(|c| c.try_with_sample_rate(want).unwrap_or_else(|| c.with_max_sample_rate()))
+        .with_context(|| format!("unsupported output format {:?}", def.sample_format()))
+}
+
 /// Opens the default output device. Returns the stream (keep alive) and the buffer to push into.
 pub fn start_player(in_rate: u32) -> Result<(cpal::Stream, Arc<Mutex<PlayBuf>>)> {
     let dev = cpal::default_host().default_output_device().context("no audio output device")?;
-    let cfg = dev.default_output_config()?;
-    if cfg.sample_format() != cpal::SampleFormat::F32 {
-        bail!("unsupported output format {:?}", cfg.sample_format());
-    }
+    let cfg = f32_output_config(&dev)?;
     let buf = Arc::new(Mutex::new(PlayBuf {
         gain: 1.0,
         q: VecDeque::new(),

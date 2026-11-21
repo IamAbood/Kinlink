@@ -33,7 +33,9 @@ mod stun;
 mod clip;
 mod rec;
 mod settings;
+#[path = "../../native/src/voice.rs"]
 mod voice;
+mod mic;
 
 mod app;
 
