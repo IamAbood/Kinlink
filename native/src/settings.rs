@@ -89,6 +89,20 @@ pub fn autostart_enabled() -> bool {
 }
 
 /// Registers the exe to start minimized and hosting at login.
+/// Lets kinlink:// invite links open this app (per user, no admin needed).
+pub fn register_url_scheme() {
+    let Ok(exe) = std::env::current_exe() else { return };
+    let set = |key: &str, name: Option<&str>, value: &str| unsafe {
+        let v = HSTRING::from(value);
+        let bytes = std::slice::from_raw_parts(v.as_ptr() as *const u8, (v.len() + 1) * 2);
+        let name = name.map(HSTRING::from);
+        let _ = RegSetKeyValueW(HKEY_CURRENT_USER, &HSTRING::from(key), name.as_ref().map(|n| windows::core::PCWSTR(n.as_ptr())).unwrap_or(windows::core::PCWSTR::null()), REG_SZ.0, Some(bytes.as_ptr() as _), bytes.len() as u32);
+    };
+    set("Software\\Classes\\kinlink", None, "URL:Kinlink invite");
+    set("Software\\Classes\\kinlink", Some("URL Protocol"), "");
+    set("Software\\Classes\\kinlink\\shell\\open\\command", None, &format!("\"{}\" --connect-friend \"%1\"", exe.display()));
+}
+
 pub fn set_autostart(on: bool) {
     unsafe {
         if on {

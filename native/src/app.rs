@@ -54,6 +54,8 @@ struct IncomingReq {
     eph: Pub,
     addrs: Vec<SocketAddr>,
     at: Instant,
+    /// Joined with an invite code: the permissions chosen when the invite was made.
+    guest: Option<Perms>,
 }
 
 struct Outgoing {
@@ -121,6 +123,12 @@ pub struct App {
     /// Friend whose chat window is open, and what's being typed.
     chat_with: Option<Pub>,
     chat_draft: String,
+    /// Joining by invite: (host id, code, since).
+    pending_join: Option<(String, String, Instant)>,
+    join_text: String,
+    /// Permissions for the next invite, and the last link made.
+    invite_perms: Perms,
+    last_invite: Option<String>,
     /// Session history: finished sessions (newest last) and the ones running now.
     history: Vec<HistEntry>,
     live_sessions: std::collections::HashMap<String, (String, Instant)>,
@@ -196,6 +204,10 @@ impl App {
             status_edit: None,
             chat_with: None,
             chat_draft: String::new(),
+            pending_join: None,
+            join_text: String::new(),
+            invite_perms: Perms { mouse: false, keyboard: false, gamepad: true },
+            last_invite: None,
             history: load_history(),
             live_sessions: Default::default(),
             rename_err: None,
@@ -318,28 +330,51 @@ impl App {
     // ------------------------------------------------------------ connection flow
 
     fn connect_to(&mut self, f: &Friend) {
+        crate::plog!("connect: asking {}", f.id());
+        self.connect_with(f.public, f.id(), None);
+    }
+
+    /// Connects to a host: a friend (invite = None) or anyone with their invite code.
+    fn connect_with(&mut self, to: Pub, host_id: String, invite: Option<String>) {
         let Some(sig) = self.signal.clone() else { return };
         if self.client.is_some() || self.outgoing.is_some() {
             return;
         }
         let req: u64 = rand::random();
-        crate::plog!("connect: asking {} (friend online: {})", f.id(), sig.friends().iter().any(|(x, on)| x.public == f.public && *on));
         let prep = Arc::new(Mutex::new(None));
-        let (p2, to, wake) = (prep.clone(), f.public, self.waker());
+        let (p2, wake, id2, me) = (prep.clone(), self.waker(), host_id.clone(), sig.id());
         std::thread::spawn(move || match client::prepare_socket() {
             Ok((sock, addrs)) => {
                 let eph = Ephemeral::new();
                 let public = eph.public;
                 *p2.lock().unwrap() = Some((sock, eph));
-                sig.send(&to, Sig::Connect { req, eph: public, addrs });
+                let msg = match invite {
+                    Some(code) => Sig::GuestConnect { code, name: me, req, eph: public, addrs },
+                    None => Sig::Connect { req, eph: public, addrs },
+                };
+                sig.send_to(&id2, &to, msg);
             }
             Err(e) => {
                 crate::plog!("connect: couldn't open a UDP socket: {e}");
                 wake();
             }
         });
-        self.outgoing = Some(Outgoing { to, name: f.id(), req, prep, at: Instant::now() });
+        self.outgoing = Some(Outgoing { to, name: host_id, req, prep, at: Instant::now() });
         self.message = None;
+    }
+
+    /// Joins a host with an invite link or code.
+    fn start_join(&mut self, text: &str) {
+        let Some(sig) = self.signal.clone() else { return };
+        match crate::signal::parse_invite(text) {
+            Some((host_id, code)) => {
+                crate::plog!("join: looking up {host_id}");
+                sig.join(&host_id);
+                self.toast(tlf("Finding {}…", &[&host_id]));
+                self.pending_join = Some((host_id, code, Instant::now()));
+            }
+            None => self.toast(tl("That isn't a valid invite link")),
+        }
     }
 
     /// New username, same key: tell friends, then reconnect to the brokers under the new id.
@@ -387,27 +422,30 @@ impl App {
     fn cancel_outgoing(&mut self) {
         crate::plog!("connect: request cancelled");
         if let (Some(o), Some(s)) = (self.outgoing.take(), &self.signal) {
-            s.send(&o.to, Sig::Cancel { req: o.req });
+            s.send_to(&o.name, &o.to, Sig::Cancel { req: o.req });
         }
     }
 
     fn accept_incoming(&mut self, r: IncomingReq) {
         let (Some(sig), Some(host)) = (self.signal.clone(), self.host.as_ref().map(|h| h.handle())) else { return };
-        let Some(f) = sig.friend(&r.from) else { return };
-        let perms = Perms { mouse: f.allow_mouse, keyboard: f.allow_keyboard, gamepad: f.allow_gamepad };
+        let perms = match (r.guest, sig.friend(&r.from)) {
+            (Some(p), _) => p,
+            (None, Some(f)) => Perms { mouse: f.allow_mouse, keyboard: f.allow_keyboard, gamepad: f.allow_gamepad },
+            (None, None) => return,
+        };
         std::thread::spawn(move || {
             let session: u64 = rand::random();
             let eph = Ephemeral::new();
             let cipher = eph.cipher(&r.eph, session, false);
-            let addrs = host.prepare(cipher, perms, r.name);
-            sig.send(&r.from, Sig::ConnectOk { req: r.req, session, eph: eph.public, addrs });
+            let addrs = host.prepare(cipher, perms, r.name.clone());
+            sig.send_to(&r.name, &r.from, Sig::ConnectOk { req: r.req, session, eph: eph.public, addrs });
             host.punch(r.addrs, session);
         });
     }
 
     fn decline_incoming(&self, r: &IncomingReq, reason: &str) {
         if let Some(s) = &self.signal {
-            s.send(&r.from, Sig::ConnectNo { req: r.req, reason: reason.into() });
+            s.send_to(&r.name, &r.from, Sig::ConnectNo { req: r.req, reason: reason.into() });
         }
     }
 
@@ -417,7 +455,7 @@ impl App {
             Event::IncomingConnect { from, req, eph, addrs } => {
                 let Some(f) = sig.friend(&from) else { return };
                 crate::plog!("host: {} wants to connect (hosting: {}, auto-accept: {})", f.id(), self.host.is_some(), f.auto_connect);
-                let r = IncomingReq { from, name: f.id(), req, eph, addrs, at: Instant::now() };
+                let r = IncomingReq { from, name: f.id(), req, eph, addrs, at: Instant::now(), guest: None };
                 if self.host.is_none() {
                     self.decline_incoming(&r, "isn't accepting connections right now");
                 } else if f.auto_connect {
@@ -462,6 +500,26 @@ impl App {
                 }
             }
             Event::FriendRequest(id) => crate::notify::toast(&tlf("{} wants to be friends", &[&id]), &tl("Open Kinlink to accept.")),
+            Event::GuestConnect { from, name, req, eph, addrs, mouse, keyboard, gamepad } => {
+                let r = IncomingReq { from, name: name.clone(), req, eph, addrs, at: Instant::now(), guest: Some(Perms { mouse, keyboard, gamepad }) };
+                if self.host.is_none() {
+                    self.decline_incoming(&r, "isn't accepting connections right now");
+                } else {
+                    crate::plog!("host: {name} joined with an invite");
+                    self.toast(tlf("{} joined with your invite", &[&name]));
+                    crate::notify::toast(&tlf("{} joined with your invite", &[&name]), &tl("Kick them from This PC if you didn't expect this."));
+                    self.accept_incoming(r);
+                }
+            }
+            Event::JoinReady { host, host_id } => {
+                if let Some((id, code, _)) = self.pending_join.clone() {
+                    if id.eq_ignore_ascii_case(&host_id) {
+                        self.pending_join = None;
+                        crate::plog!("join: found {host_id}, asking to connect");
+                        self.connect_with(host, host_id, Some(code));
+                    }
+                }
+            }
             Event::Message { from, text } => {
                 let open_here = self.chat_with == Some(from) && self.window().is_some_and(|w| w.has_focus());
                 if open_here {
@@ -1413,6 +1471,15 @@ impl App {
                                 }
                             }
                         });
+                        ui.horizontal(|ui| {
+                            let enter_now = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            let r = ui.add(egui::TextEdit::singleline(&mut self.join_text).hint_text(tr("Got an invite? Paste the link here")).desired_width(230.0).margin(egui::vec2(10.0, 8.0)));
+                            let enter = (r.has_focus() || r.lost_focus()) && enter_now;
+                            if ui.add(egui::Button::new(tr("Join")).min_size(egui::vec2(70.0, 34.0))).clicked() || enter {
+                                let t = std::mem::take(&mut self.join_text);
+                                self.start_join(&t);
+                            }
+                        });
                         if let Some(e) = &self.add_err {
                             ui.colored_label(t::DANGER, crate::rtl::show(e));
                         }
@@ -1605,6 +1672,45 @@ impl App {
                         }
                         if let Some(e) = &self.host_err {
                             ui.colored_label(t::DANGER, crate::rtl::show(e));
+                        }
+                        if self.host.is_some() {
+                            t::section(ui, &tr("Invite someone (no friend request needed)"));
+                            t::card().show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(RichText::new(tr("They may use:")).color(t::SOFT));
+                                    t::switch(ui, &mut self.invite_perms.mouse, &tr("Mouse"));
+                                    t::switch(ui, &mut self.invite_perms.keyboard, &tr("Keyboard"));
+                                    t::switch(ui, &mut self.invite_perms.gamepad, &tr("Controller"));
+                                });
+                                ui.horizontal(|ui| {
+                                    if t::primary(ui, &tr("Create invite"), Some(Icon::Plus), true).clicked() {
+                                        let p = self.invite_perms;
+                                        let link = sig.create_invite(p.mouse, p.keyboard, p.gamepad);
+                                        ui.ctx().copy_text(link.clone());
+                                        self.toast(tl("Invite link copied. Send it to them: works once, for 1 hour."));
+                                        self.last_invite = Some(link);
+                                    }
+                                    ui.label(RichText::new(tr("One use, valid for 1 hour")).size(11.5).color(t::MUTED));
+                                });
+                                for inv in sig.invites() {
+                                    let mins = inv.expires.saturating_duration_since(Instant::now()).as_secs() / 60 + 1;
+                                    let what: Vec<String> = [(inv.mouse, "mouse"), (inv.keyboard, "keyboard"), (inv.gamepad, "controller")].iter().filter(|x| x.0).map(|x| tl(x.1)).collect();
+                                    let what = if what.is_empty() { tl("view only (spectator)") } else { what.join(", ") };
+                                    ui.horizontal(|ui| {
+                                        ui.label(RichText::new(&inv.code).monospace().color(t::ACCENT_SOFT));
+                                        ui.label(RichText::new(trf("{} · {} min left", &[&what, &mins.to_string()])).size(12.0).color(t::SOFT));
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            if ui.small_button(tr("Revoke")).clicked() {
+                                                sig.revoke_invite(&inv.code);
+                                            }
+                                            if ui.small_button(tr("Copy link")).clicked() {
+                                                ui.ctx().copy_text(sig.invite_link(&inv.code));
+                                            }
+                                        });
+                                    });
+                                }
+                            });
                         }
                         ui.horizontal(|ui| {
                             t::section(ui, &tr("Recent sessions"));
@@ -2102,6 +2208,7 @@ Updating the graphics driver usually fixes this.");
         crate::plog!("startup: graphics ok, starting tray, hotkeys and friends");
         listen_for_show(self.waker());
         crate::notify::register();
+        settings::register_url_scheme();
         crate::hotkey::install(self.waker());
         match build_tray(self.waker()) {
             Some((t, rx)) => {
@@ -2255,6 +2362,16 @@ Updating the graphics driver usually fixes this.");
             self.on_key(k);
         }
         // --connect-friend: connect as soon as that friend shows up online.
+        if let Some((link, _)) = self.connect_on_start.clone().filter(|(l, _)| l.starts_with("kinlink://")) {
+            if self.signal.is_some() {
+                self.connect_on_start = None;
+                self.start_join(&link);
+            }
+        }
+        if self.pending_join.as_ref().is_some_and(|(_, _, at)| at.elapsed() > Duration::from_secs(40)) {
+            let (id, _, _) = self.pending_join.take().unwrap();
+            self.toast(tlf("Couldn't find {}. Is that PC on and running Kinlink?", &[&id]));
+        }
         if let (Some((id, since)), Some(sig)) = (self.connect_on_start.clone(), self.signal.clone()) {
             match sig.friends().into_iter().find(|(f, _)| f.id().eq_ignore_ascii_case(&id)) {
                 Some((f, true)) => {

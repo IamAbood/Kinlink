@@ -261,6 +261,22 @@ pub fn get(en: &str) -> Option<&'static str> {
         "{} · sent" => "{} · تم الإرسال",
         "Type a message" => "اكتب رسالة",
         "Send" => "إرسال",
+        // ---- 0.20 invites
+        "Got an invite? Paste the link here" => "لديك دعوة؟ الصق الرابط هنا",
+        "Join" => "انضمام",
+        "Finding {}…" => "جارٍ البحث عن {}…",
+        "That isn't a valid invite link" => "هذا ليس رابط دعوة صالحًا",
+        "Couldn't find {}. Is that PC on and running Kinlink?" => "تعذر العثور على {}. هل الجهاز يعمل وKinlink مفتوح عليه؟",
+        "{} joined with your invite" => "{} انضم بدعوتك",
+        "Kick them from This PC if you didn't expect this." => "اطرده من صفحة هذا الجهاز إن لم تكن تتوقع ذلك.",
+        "Invite someone (no friend request needed)" => "ادعُ شخصًا (بلا طلب صداقة)",
+        "They may use:" => "يمكنه استخدام:",
+        "Create invite" => "إنشاء دعوة",
+        "Invite link copied. Send it to them: works once, for 1 hour." => "تم نسخ رابط الدعوة. أرسله له: يعمل مرة واحدة ولمدة ساعة.",
+        "One use, valid for 1 hour" => "استخدام واحد، صالح لمدة ساعة",
+        "{} · {} min left" => "{} · متبقٍ {} د",
+        "Revoke" => "إلغاء",
+        "Copy link" => "نسخ الرابط",
         _ => return None,
     })
 }

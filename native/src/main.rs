@@ -622,6 +622,48 @@ fn signaltest() -> i32 {
     if !wait("renamed A comes online for B", 40, &|| a2.online() && b.friends().iter().any(|(f, on)| f.id() == new_id && *on)) {
         return 1;
     }
+    // Invites: a stranger joins with a one-use code (no friend request).
+    let e = Signal::start(crypto::Identity::new("echo_test"), None, || {});
+    if !wait("E online", 20, &|| e.online()) {
+        return 1;
+    }
+    let link = a2.create_invite(true, false, true);
+    let (hid, code) = signal::parse_invite(&link).expect("invite link parses");
+    e.join(&hid);
+    let host = std::sync::Mutex::new(None);
+    if !wait("E finds the host by its invite", 20, &|| {
+        for ev in e.take_events() {
+            if let Event::JoinReady { host: h, .. } = ev {
+                *host.lock().unwrap() = Some(h);
+            }
+        }
+        host.lock().unwrap().is_some()
+    }) {
+        return 1;
+    }
+    let host = host.lock().unwrap().unwrap();
+    let ask = |req: u64| e.send_to(&hid, &host, Sig::GuestConnect { code: code.clone(), name: e.id(), req, eph: [3; 32], addrs: vec!["203.0.113.9:5000".parse().unwrap()] });
+    ask(41);
+    let guest = std::sync::Mutex::new(None);
+    if !wait("host accepts the invite with its permissions", 20, &|| {
+        for ev in a2.take_events() {
+            if let Event::GuestConnect { from, name, req: 41, mouse: true, keyboard: false, gamepad: true, .. } = ev {
+                a2.send_to(&name, &from, Sig::ConnectOk { req: 41, session: 9, eph: [4; 32], addrs: vec![] });
+                *guest.lock().unwrap() = Some(from);
+            }
+        }
+        guest.lock().unwrap().is_some()
+    }) {
+        return 1;
+    }
+    if !wait("guest gets the host's answer", 20, &|| e.take_events().iter().any(|ev| matches!(ev, Event::ConnectReply { sig: Sig::ConnectOk { req: 41, .. }, .. }))) {
+        return 1;
+    }
+    ask(42);
+    if !wait("the same code can't be used twice", 20, &|| e.take_events().iter().any(|ev| matches!(ev, Event::ConnectReply { sig: Sig::ConnectNo { req: 42, .. }, .. }))) {
+        return 1;
+    }
+    e.shutdown();
     // Old short ids still work (friends on older versions share those).
     let c = Signal::start(crypto::Identity::new("charlie_test"), None, || {});
     if !wait("C online", 20, &|| c.online()) {

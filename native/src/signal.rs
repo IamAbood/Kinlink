@@ -67,6 +67,30 @@ pub enum Sig {
     /// A chat message outside sessions; acked so the sender knows it arrived.
     Message { id: u64, text: String, ts: u64 },
     MessageAck { id: u64 },
+    /// Connect with an invite code instead of being friends. `name` = the guest's full id.
+    GuestConnect { code: String, name: String, req: u64, eph: Pub, addrs: Vec<SocketAddr> },
+}
+
+/// An invite this PC handed out: one use, expires after an hour.
+#[derive(Clone)]
+pub struct Invite {
+    pub code: String,
+    pub mouse: bool,
+    pub keyboard: bool,
+    pub gamepad: bool,
+    pub expires: Instant,
+}
+
+const INVITE_FOR: Duration = Duration::from_secs(3600);
+
+/// "kinlink://join/name%231234-ABCDEF/CODE" (or "name#1234-ABCDEF CODE") -> (host id, code).
+pub fn parse_invite(s: &str) -> Option<(String, String)> {
+    let s = s.trim().trim_end_matches('/');
+    let rest = s.strip_prefix("kinlink://join/").map(|r| r.replace("%23", "#").replace("%20", " ")).unwrap_or_else(|| s.to_string());
+    let (id, code) = rest.rsplit_once(['/', ' '])?;
+    let (name, tag) = crypto::parse_id(id.trim())?;
+    let code = code.trim().to_uppercase();
+    (code.len() == 8 && code.chars().all(|c| c.is_ascii_alphanumeric())).then(|| (format!("{name}#{tag}"), code))
 }
 
 /// One chat message with a friend.
@@ -106,6 +130,10 @@ pub enum Event {
     FriendRequest(String),
     /// A friend sent a chat message.
     Message { from: Pub, text: String },
+    /// Someone used one of our invite codes (already checked; one use).
+    GuestConnect { from: Pub, name: String, req: u64, eph: Pub, addrs: Vec<SocketAddr>, mouse: bool, keyboard: bool, gamepad: bool },
+    /// The host we're joining by invite was found: send it the request now.
+    JoinReady { host: Pub, host_id: String },
 }
 
 /// Writes a friends file directly (test profiles).
@@ -150,6 +178,11 @@ struct State {
     /// Chat history per friend (oldest first) and unread counts.
     messages: HashMap<Pub, Vec<ChatMsg>>,
     unread: HashMap<Pub, u32>,
+    /// Invites we handed out (host) and hosts we're joining by invite (guest: id -> key once known).
+    invites: Vec<Invite>,
+    joins: Vec<(String, Option<Pub>)>,
+    /// When each unconfirmed chat message was last sent.
+    msg_tries: HashMap<u64, Instant>,
 }
 
 struct Inner {
@@ -291,6 +324,46 @@ impl Signal {
         }
     }
 
+    /// Creates a one-use invite (valid 1 hour); returns the link to share.
+    pub fn create_invite(&self, mouse: bool, keyboard: bool, gamepad: bool) -> String {
+        const B32: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+        let code: String = rand::random::<[u8; 8]>().iter().map(|b| B32[(b & 31) as usize] as char).collect();
+        self.0.st.lock().unwrap().invites.push(Invite { code: code.clone(), mouse, keyboard, gamepad, expires: Instant::now() + INVITE_FOR });
+        format!("kinlink://join/{}/{code}", self.id().replace('#', "%23"))
+    }
+    /// Invites still valid.
+    pub fn invites(&self) -> Vec<Invite> {
+        let mut st = self.0.st.lock().unwrap();
+        st.invites.retain(|i| i.expires > Instant::now());
+        st.invites.clone()
+    }
+    pub fn revoke_invite(&self, code: &str) {
+        self.0.st.lock().unwrap().invites.retain(|i| i.code != code);
+    }
+    pub fn invite_link(&self, code: &str) -> String {
+        format!("kinlink://join/{}/{code}", self.id().replace('#', "%23"))
+    }
+
+    /// Starts joining a host by its invite: looks up its key, then Event::JoinReady.
+    pub fn join(&self, host_id: &str) {
+        {
+            let mut st = self.0.st.lock().unwrap();
+            if !st.joins.iter().any(|(id, _)| id.eq_ignore_ascii_case(host_id)) {
+                st.joins.push((host_id.to_string(), None));
+            }
+        }
+        if let Some(p) = self.0.st.lock().unwrap().friends.iter().find(|f| f.id().eq_ignore_ascii_case(host_id)).map(|f| f.public) {
+            self.0.st.lock().unwrap().joins.iter_mut().for_each(|j| if j.0.eq_ignore_ascii_case(host_id) { j.1 = Some(p) });
+            return self.event(Event::JoinReady { host: p, host_id: host_id.to_string() });
+        }
+        self.lookup(host_id);
+    }
+
+    /// Sends to anyone whose id and key we know (invites: the other side isn't a friend).
+    pub fn send_to(&self, id: &str, public: &Pub, sig: Sig) {
+        self.send_to_id(id, public, sig);
+    }
+
     /// Chat history with a friend, oldest first.
     pub fn messages(&self, with: &Pub) -> Vec<ChatMsg> {
         self.0.st.lock().unwrap().messages.get(with).cloned().unwrap_or_default()
@@ -313,6 +386,7 @@ impl Signal {
             }
         }
         self.save_messages();
+        self.0.st.lock().unwrap().msg_tries.insert(id, Instant::now());
         self.send(to, Sig::Message { id, text, ts });
     }
 
@@ -563,6 +637,16 @@ impl Signal {
                 _ => None,
             }
         };
+        let join = {
+            let mut st = self.0.st.lock().unwrap();
+            st.joins.iter_mut().find(|j| j.1.is_none() && (j.0.eq_ignore_ascii_case(&id) || j.0.eq_ignore_ascii_case(&short))).map(|j| {
+                j.1 = Some(k.public);
+                j.0.clone()
+            })
+        };
+        if let Some(host_id) = join {
+            self.event(Event::JoinReady { host: k.public, host_id });
+        }
         if let Some(id) = conflict {
             crate::plog!("signal: two different PCs claim {id}");
             self.event(Event::Toast(format!("Warning: two different PCs claim to be {id}. Check the safety code with your friend before trusting it.")));
@@ -632,6 +716,25 @@ impl Signal {
                     self.save();
                     self.event(Event::Toast(format!("{id} accepted your friend request")));
                 }
+            }
+            Sig::GuestConnect { code, name, req, eph, addrs } => {
+                // Their id must match their key, like any lookup.
+                let Some((n, tag)) = crypto::parse_id(&name) else { return };
+                if crypto::tag_for(&n, &from) != tag {
+                    return;
+                }
+                let found = {
+                    let mut st = self.0.st.lock().unwrap();
+                    st.invites.retain(|i| i.expires > Instant::now());
+                    st.invites.iter().position(|i| i.code.eq_ignore_ascii_case(&code)).map(|p| st.invites.remove(p)) // one use
+                };
+                match found {
+                    Some(i) => self.event(Event::GuestConnect { from, name, req, eph, addrs, mouse: i.mouse, keyboard: i.keyboard, gamepad: i.gamepad }),
+                    None => self.send_to_id(&name, &from, Sig::ConnectNo { req, reason: "says this invite code is wrong, expired or already used".into() }),
+                }
+            }
+            s @ (Sig::ConnectOk { .. } | Sig::ConnectNo { .. }) if !is_friend && self.0.st.lock().unwrap().joins.iter().any(|j| j.1 == Some(from)) => {
+                self.event(Event::ConnectReply { from, sig: s })
             }
             _ if !is_friend => {}
             Sig::FriendRemove => {
@@ -724,16 +827,22 @@ impl Signal {
         let mut last_ping = Instant::now();
         while !self.0.stop.load(SeqCst) {
             thread::sleep(Duration::from_millis(500));
+            // Re-send chat messages the friend hasn't confirmed (lost on the way, or they were offline).
+            let resend: Vec<(Pub, ChatMsg)> = {
+                let mut st = self.0.st.lock().unwrap();
+                let due: Vec<(Pub, ChatMsg)> = st.messages.iter().flat_map(|(p, l)| l.iter().filter(|m| m.mine && !m.delivered).rev().take(20).map(move |m| (*p, m.clone()))).collect();
+                let due: Vec<(Pub, ChatMsg)> = due.into_iter().filter(|(_, m)| st.msg_tries.get(&m.id).is_none_or(|t| t.elapsed() > Duration::from_secs(8))).collect();
+                for (_, m) in &due {
+                    st.msg_tries.insert(m.id, Instant::now());
+                }
+                due
+            };
+            for (p, m) in resend {
+                self.send(&p, Sig::Message { id: m.id, text: m.text, ts: m.ts });
+            }
             if last_ping.elapsed() > Duration::from_secs(25) {
                 last_ping = Instant::now();
-                // Re-send chat messages that haven't been confirmed (friend was offline).
-                let resend: Vec<(Pub, ChatMsg)> = {
-                    let st = self.0.st.lock().unwrap();
-                    st.messages.iter().flat_map(|(p, l)| l.iter().filter(|m| m.mine && !m.delivered).rev().take(20).map(move |m| (*p, m.clone()))).collect()
-                };
-                for (p, m) in resend {
-                    self.send(&p, Sig::Message { id: m.id, text: m.text, ts: m.ts });
-                }
+
                 let pubs: Vec<Pub> = self.0.st.lock().unwrap().friends.iter().map(|f| f.public).collect();
                 for p in pubs {
                     self.send(&p, Sig::Ping { reply: false });
