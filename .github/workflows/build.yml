@@ -77,4 +77,4 @@ jobs:
         with:
           files: out/Kinlink.exe
           body_path: notes.md
-          prerelease: ${{ contains(github.ref_name, 'beta') }}
+          make_latest: true # so releases/latest/download/Kinlink.exe always gets the newest

@@ -1,6 +1,6 @@
 [package]
 name = "pclone"
-version = "0.16.1-beta"
+version = "0.16.2-beta"
 license = "MIT"
 authors = ["Abdulkareem Alsaou"]
 edition = "2024"
