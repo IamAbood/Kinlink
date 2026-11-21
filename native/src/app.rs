@@ -183,6 +183,10 @@ pub struct App {
     qual_idx: usize,
     /// Sharp-text mode: 30 fps with more detail per frame (for reading/office work).
     sharp: bool,
+    /// Session tool windows: the host's games, and a terminal on the host.
+    games_open: bool,
+    term_open: bool,
+    term_input: String,
     volume: u32,
     muted: bool,
     autostart: bool,
@@ -264,6 +268,9 @@ impl App {
             res_idx: 0,
             qual_idx: 3,
             sharp: false,
+            games_open: false,
+            term_open: false,
+            term_input: String::new(),
             volume: 100,
             muted: false,
             autostart: settings::autostart_enabled(),
@@ -1201,9 +1208,62 @@ impl App {
         self.show_window();
     }
 
+    /// Games list and terminal windows during a session.
+    fn tools_ui(&mut self, ctx: &egui::Context) {
+        use crate::theme as t;
+        let Some(c) = &self.client else { return };
+        if self.games_open {
+            let games = c.games();
+            let mut open = true;
+            egui::Window::new(tr("Games on that PC")).open(&mut open).default_size([320.0, 380.0]).show(ctx, |ui| {
+                if games.is_empty() {
+                    para(ui, &tl("No Steam or Epic games found there (or you don't have mouse and keyboard control)."), 13.0, t::MUTED);
+                }
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for g in &games {
+                        ui.horizontal(|ui| {
+                            ui.label(g);
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.small_button(tr("Play")).clicked() {
+                                    c.launch_game(g);
+                                }
+                            });
+                        });
+                    }
+                });
+                if ui.button(tr("Refresh")).clicked() {
+                    c.list_games();
+                }
+            });
+            self.games_open = open;
+        }
+        if self.term_open {
+            let text = c.shell_text();
+            let mut open = true;
+            let mut run = None;
+            egui::Window::new(tr("Terminal on that PC")).open(&mut open).default_size([560.0, 360.0]).show(ctx, |ui| {
+                egui::ScrollArea::vertical().max_height(ui.available_height() - 40.0).stick_to_bottom(true).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(RichText::new(if text.is_empty() { tl("Type a command (cmd.exe) and press Enter. Each line runs on its own, 30 s max.") } else { text }).monospace().size(12.0));
+                });
+                let r = ui.add(egui::TextEdit::singleline(&mut self.term_input).font(egui::TextStyle::Monospace).desired_width(f32::INFINITY).hint_text("dir, ipconfig, tasklist…"));
+                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !self.term_input.trim().is_empty() {
+                    run = Some(std::mem::take(&mut self.term_input));
+                    r.request_focus();
+                }
+            });
+            if let Some(line) = run {
+                c.run_shell(line.trim());
+            }
+            self.term_open = open;
+        }
+    }
+
     fn overlay_ui(&mut self, ctx: &egui::Context) {
         use crate::theme::{self as t, Icon};
         self.draw_remote_cursor(ctx);
+        let Some(c) = &self.client else { return };
+        self.tools_ui(ctx);
         let Some(c) = &self.client else { return };
         if self.s.show_stats {
             let st = c.stats();
@@ -1300,6 +1360,17 @@ impl App {
                         hide_menu = true;
                     }
                 });
+                ui.horizontal(|ui| {
+                    if t::tile(ui, Icon::Gamepad, &tr("Games"), self.games_open.then_some(t::ACCENT_SOFT), w).on_hover_text(tr("Start a game installed on that PC (Steam, Epic)")).clicked() {
+                        self.games_open = !self.games_open;
+                        if self.games_open {
+                            c.list_games();
+                        }
+                    }
+                    if t::tile(ui, Icon::Keyboard, &tr("Terminal"), self.term_open.then_some(t::ACCENT_SOFT), w).on_hover_text(tr("Run commands on that PC")).clicked() {
+                        self.term_open = !self.term_open;
+                    }
+                });
                 // stream settings
                 egui::Grid::new("ov").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
                     ui.label(RichText::new(tr("Preset")).color(t::SOFT));
@@ -1335,6 +1406,9 @@ impl App {
                                     if ui.selectable_label(i == *current as usize, format!(" {} ", i + 1)).clicked() {
                                         c.select_monitor(i as u8);
                                     }
+                                }
+                                if ui.selectable_label(*current == crate::proto::ALL_SCREENS, tr("All")).on_hover_text(tr("Every screen at once, side by side")).clicked() {
+                                    c.select_monitor(crate::proto::ALL_SCREENS);
                                 }
                             });
                             ui.end_row();

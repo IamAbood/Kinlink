@@ -36,6 +36,7 @@ mod theme;
 mod syshelper;
 mod updater;
 mod web;
+mod games;
 
 use std::time::{Duration, Instant};
 
@@ -117,6 +118,35 @@ fn main() {
     }
     if args.iter().any(|a| a == "--padtest") {
         std::process::exit(padtest());
+    }
+    if args.iter().any(|a| a == "--toolstest") {
+        // In-process host + guest: games list, terminal, all-screens picture.
+        let cfg = host::HostConfig { name: "host".into(), port: 47895, max_mbps: 20, fps: 30, hardware: true, upnp: false, record: false };
+        let h = host::Host::start(cfg).unwrap();
+        let (ce, he) = (crypto::Ephemeral::new(), crypto::Ephemeral::new());
+        h.handle().prepare(he.cipher(&ce.public, 79, false), host::Perms { mouse: true, keyboard: true, gamepad: false }, "g#0001".into());
+        let sock = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+        let c = client::Client::start(sock, vec!["127.0.0.1:47895".parse().unwrap()], ce.cipher(&he.public, 79, true), "host".into(), || {});
+        std::thread::sleep(Duration::from_secs(3));
+        c.list_games();
+        c.run_shell("echo kinlink-term-ok");
+        std::thread::sleep(Duration::from_secs(3));
+        println!("games: {:?}", c.games());
+        println!("terminal: {:?}", c.shell_text());
+        let mons = capture::monitors().len();
+        c.select_monitor(proto::ALL_SCREENS);
+        let t = Instant::now();
+        let mut size = (0, 0);
+        while t.elapsed() < Duration::from_secs(5) {
+            if let Some(f) = c.take_frame() {
+                size = (f.w, f.h);
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        println!("monitors: {mons}, all-screens picture {}x{}; host: {}", size.0, size.1, h.status().encoder);
+        let ok = c.shell_text().contains("kinlink-term-ok") && size.0 > 0;
+        println!("{}", if ok { "PASS" } else { "FAIL" });
+        std::process::exit(if ok { 0 } else { 1 });
     }
     if args.iter().any(|a| a == "--webtest") {
         // View-only host + a browser link; prints who's connected for 3 minutes.

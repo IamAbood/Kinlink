@@ -102,6 +102,9 @@ struct Shared {
     wake: Box<dyn Fn() + Send + Sync>,
     /// Last quality / sharp-text choice, re-sent once connected (sends before that go nowhere).
     quality: Mutex<Option<(u32, u32)>>,
+    /// Host's installed games (after list_games) and the terminal's text.
+    games: Mutex<Vec<String>>,
+    shell: Mutex<String>,
     sharp: AtomicBool,
 }
 
@@ -155,6 +158,8 @@ impl Client {
             cursor: Mutex::new(None),
             shape: Mutex::new(None),
             quality: Mutex::new(None),
+            games: Mutex::new(Vec::new()),
+            shell: Mutex::new(String::new()),
             sharp: AtomicBool::new(false),
             wake: Box::new(wake),
         });
@@ -283,6 +288,26 @@ impl Client {
     pub fn take_unread(&self) -> u32 {
         self.sh.unread.swap(0, SeqCst)
     }
+    /// Asks the host for its games (answers arrive in games()).
+    pub fn list_games(&self) {
+        self.sh.games.lock().unwrap().clear();
+        self.sh.send(&Msg::ListGames);
+    }
+    pub fn games(&self) -> Vec<String> {
+        self.sh.games.lock().unwrap().clone()
+    }
+    pub fn launch_game(&self, name: &str) {
+        self.sh.send(&Msg::LaunchGame(name.to_string()));
+    }
+    /// Runs a command on the host (output arrives in shell_text()).
+    pub fn run_shell(&self, line: &str) {
+        self.sh.shell.lock().unwrap().push_str(&format!("> {line}\n"));
+        self.sh.send(&Msg::Shell(line.to_string()));
+    }
+    pub fn shell_text(&self) -> String {
+        self.sh.shell.lock().unwrap().clone()
+    }
+
     pub fn set_sharp(&self, on: bool) {
         self.sh.sharp.store(on, SeqCst);
         self.sh.send(&Msg::SetSharp(on));
@@ -501,6 +526,27 @@ fn recv_loop(sh: Arc<Shared>) {
                 if let Some(v) = &*sh.voice.lock().unwrap() {
                     v.play(&from, &pcm);
                 }
+            }
+            Msg::Games(v) => {
+                let mut g = sh.games.lock().unwrap();
+                g.extend(v);
+                g.sort_by_key(|n| n.to_lowercase());
+                g.dedup();
+                (sh.wake)();
+            }
+            Msg::ShellOut(t) => {
+                let mut s = sh.shell.lock().unwrap();
+                s.push_str(&t);
+                if s.len() > 200_000 {
+                    let cut = s.len() - 150_000;
+                    let cut = (cut..s.len()).find(|i| s.is_char_boundary(*i)).unwrap_or(0);
+                    s.drain(..cut);
+                }
+                (sh.wake)();
+            }
+            Msg::Info(t) => {
+                sh.notices.lock().unwrap().push(t);
+                (sh.wake)();
             }
             Msg::Chat { from, text } => {
                 sh.chat.lock().unwrap().push((from, text));

@@ -329,6 +329,18 @@ pub fn get(en: &str) -> Option<&'static str> {
         "Up to 8 people watch your screen from their browsers at once (no control)." => "حتى 8 أشخاص يشاهدون شاشتك من متصفحاتهم معًا (بدون تحكم).",
         "Watch party link copied: up to 8 people can watch for 3 hours." => "تم نسخ رابط المشاهدة الجماعية: حتى 8 أشخاص لمدة 3 ساعات.",
         "View only, many people" => "مشاهدة فقط، لعدة أشخاص",
+        "All" => "الكل",
+        "Every screen at once, side by side" => "كل الشاشات معًا جنبًا إلى جنب",
+        "Games" => "الألعاب",
+        "Start a game installed on that PC (Steam, Epic)" => "شغّل لعبة مثبتة على ذلك الجهاز (Steam و Epic)",
+        "Terminal" => "الطرفية",
+        "Run commands on that PC" => "نفّذ أوامر على ذلك الجهاز",
+        "Games on that PC" => "الألعاب على ذلك الجهاز",
+        "No Steam or Epic games found there (or you don't have mouse and keyboard control)." => "لم يتم العثور على ألعاب Steam أو Epic هناك (أو ليس لديك تحكم بالماوس ولوحة المفاتيح).",
+        "Play" => "تشغيل",
+        "Refresh" => "تحديث",
+        "Terminal on that PC" => "الطرفية على ذلك الجهاز",
+        "Type a command (cmd.exe) and press Enter. Each line runs on its own, 30 s max." => "اكتب أمرًا (cmd.exe) واضغط Enter. كل سطر يعمل وحده، 30 ثانية كحد أقصى.",
         _ => return None,
     })
 }

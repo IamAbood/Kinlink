@@ -708,6 +708,49 @@ fn on_packet(sh: &Arc<Shared>, idx: usize, from: SocketAddr, pkt: &[u8]) {
             sh.bitrate.store(cap, SeqCst);
             sh.keyframe.store(true, SeqCst);
         }
+        Msg::ListGames => {
+            let names: Vec<String> = if perms.mouse && perms.keyboard { crate::games::installed().into_iter().map(|g| g.0).collect() } else { Vec::new() };
+            if names.is_empty() {
+                reply(&Msg::Games(Vec::new()));
+            }
+            // A few names per datagram.
+            let mut batch: Vec<String> = Vec::new();
+            for n in names {
+                if batch.iter().map(|b| b.len() + 8).sum::<usize>() + n.len() > 900 {
+                    reply(&Msg::Games(std::mem::take(&mut batch)));
+                }
+                batch.push(n.chars().take(120).collect());
+            }
+            if !batch.is_empty() {
+                reply(&Msg::Games(batch));
+            }
+        }
+        Msg::LaunchGame(name) => {
+            let text = if !(perms.mouse && perms.keyboard) {
+                "The host hasn't given you mouse and keyboard control.".to_string()
+            } else {
+                match crate::games::launch(&name) {
+                    Ok(()) => format!("Starting {name}…"),
+                    Err(e) => format!("Couldn't start {name}: {e}"),
+                }
+            };
+            reply(&Msg::Info(text));
+        }
+        Msg::Shell(line) => {
+            if !perms.keyboard {
+                reply(&Msg::ShellOut("Not allowed: the host hasn't given you keyboard control.\n".into()));
+            } else {
+                crate::plog!("host: guest ran a command");
+                let (sh2, cipher2) = (sh.clone(), cipher.clone());
+                thread::spawn(move || {
+                    let text = crate::games::run_command(&line);
+                    for p in proto::pieces(&format!("{text}\n"), 900) {
+                        let _ = sh2.socks[idx].send_to(&cipher2.seal(&encode(&Msg::ShellOut(p))), from);
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                });
+            }
+        }
         Msg::SetSharp(on) => {
             if let Some(s) = sh.sessions.lock().unwrap().iter_mut().find(|s| s.id == sid) {
                 s.sharp = on;
@@ -767,6 +810,16 @@ fn adapt_bitrate(sh: &Shared, sid: u64, lost_total: u32) {
 
 // ---------------------------------------------------------------- video
 
+/// The desktop area covered by all these monitors.
+fn union_rect(all: &[Capturer]) -> windows::Win32::Foundation::RECT {
+    let mut u = all[0].monitor.rect;
+    for c in &all[1..] {
+        let r = c.monitor.rect;
+        (u.left, u.top, u.right, u.bottom) = (u.left.min(r.left), u.top.min(r.top), u.right.max(r.right), u.bottom.max(r.bottom));
+    }
+    u
+}
+
 fn video_loop(sh: Arc<Shared>) {
     let mut cap: Option<Capturer> = None;
     let mut enc: Option<Box<dyn crate::codec::VideoEncoder>> = None;
@@ -776,6 +829,9 @@ fn video_loop(sh: Arc<Shared>) {
     let mut frame_id = 0u32;
     let mut dirty = false;
     let mut enc_fps = 0;
+    // "All screens": one capturer per monitor, joined like the real desktop layout.
+    let mut all: Vec<Capturer> = Vec::new();
+    let mut bufs: Vec<Vec<u8>> = Vec::new();
     // Host-side recording (Settings): one file per stretch of guests being connected.
     let mut recorder: Option<crate::rec::Recorder> = None;
     let finish_rec = |r: crate::rec::Recorder, sh: &Shared| match r.finish() {
@@ -799,6 +855,7 @@ fn video_loop(sh: Arc<Shared>) {
             if let Some(r) = recorder.take() {
                 finish_rec(r, &sh);
             }
+            all.clear();
             cap = None;
             enc = None;
             sent_shape = u32::MAX;
@@ -841,7 +898,62 @@ fn video_loop(sh: Arc<Shared>) {
                 Some(Ok(None)) => {}
                 Some(Err(_)) | None => thread::sleep(Duration::from_millis(50)),
             }
+        } else if sh.monitor.load(SeqCst) == proto::ALL_SCREENS {
+            cap = None;
+            cur_monitor = u8::MAX;
+            if all.is_empty() {
+                all = monitors().into_iter().filter_map(|m| Capturer::new(m).ok()).collect();
+                bufs = vec![Vec::new(); all.len()];
+                if all.is_empty() {
+                    thread::sleep(Duration::from_millis(300));
+                    continue;
+                }
+                sh.injector.lock().unwrap().set_monitor(union_rect(&all));
+                sh.keyframe.store(true, SeqCst);
+            }
+            let u = union_rect(&all);
+            let (uw, uh) = (((u.right - u.left) as usize) & !1, ((u.bottom - u.top) as usize) & !1);
+            let wait = next_slot.saturating_duration_since(Instant::now()).max(Duration::from_millis(1));
+            let (mut changed, mut failed) = (false, false);
+            for (i, c) in all.iter_mut().enumerate() {
+                let ms = if i == 0 { wait.as_millis() as u32 } else { 0 };
+                match c.next_frame(ms, &mut bufs[i]) {
+                    Ok(ch) => {
+                        changed |= ch.image;
+                        let (visible, cx, cy, version) = c.cursor();
+                        if visible && (ch.cursor || sh.keyframe.load(SeqCst)) {
+                            let x = (c.monitor.rect.left - u.left + cx) as f32 / uw as f32;
+                            let y = (c.monitor.rect.top - u.top + cy) as f32 / uh as f32;
+                            sh.broadcast(&Msg::CursorPos { x, y, visible, version });
+                        }
+                    }
+                    Err(_) => failed = true,
+                }
+            }
+            if failed {
+                all.clear();
+                thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            if changed || frame.len() != uw * uh * 4 {
+                frame.resize(uw * uh * 4, 0);
+                for (i, c) in all.iter().enumerate() {
+                    let b = &bufs[i];
+                    if b.len() < c.width * c.height * 4 {
+                        continue;
+                    }
+                    let (ox, oy) = ((c.monitor.rect.left - u.left) as usize, (c.monitor.rect.top - u.top) as usize);
+                    let w = c.width.min(uw.saturating_sub(ox));
+                    for row in 0..c.height.min(uh.saturating_sub(oy)) {
+                        let d = ((oy + row) * uw + ox) * 4;
+                        frame[d..d + w * 4].copy_from_slice(&b[row * c.width * 4..row * c.width * 4 + w * 4]);
+                    }
+                }
+                dirty = true;
+            }
+            (fw, fh) = (uw, uh);
         } else {
+        all.clear();
         let mon = sh.monitor.load(SeqCst);
         if mon != cur_monitor {
             cap = None;

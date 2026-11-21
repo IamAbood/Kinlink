@@ -9,6 +9,8 @@ pub const CHUNK: usize = 1100;
 /// PadState::kind values: how the controller should appear on the host.
 pub const PAD_XBOX: u8 = 0;
 pub const PAD_PLAYSTATION: u8 = 1;
+/// SelectMonitor value for "every monitor at once".
+pub const ALL_SCREENS: u8 = 255;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Msg {
@@ -49,6 +51,31 @@ pub enum Msg {
     // client -> host (added later: older hosts just ignore it)
     /// Sharp text: more detail per frame instead of smoothness (frame rate capped at 30).
     SetSharp(bool),
+    /// Guest asks for the host's installed games; host answers with Games (in pieces).
+    ListGames,
+    Games(Vec<String>),
+    LaunchGame(String),
+    /// Guest terminal: one command line; output comes back as ShellOut pieces.
+    Shell(String),
+    ShellOut(String),
+    /// A short note for the guest ("Starting Dota 2…").
+    Info(String),
+}
+
+/// Splits text into pieces that fit in one datagram.
+pub fn pieces(s: &str, max: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for ch in s.chars() {
+        if cur.len() + ch.len_utf8() > max {
+            out.push(std::mem::take(&mut cur));
+        }
+        cur.push(ch);
+    }
+    if !cur.is_empty() || out.is_empty() {
+        out.push(cur);
+    }
+    out
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
