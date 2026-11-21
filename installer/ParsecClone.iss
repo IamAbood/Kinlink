@@ -1,4 +1,4 @@
-; Parsec Clone installer (Inno Setup 6). Build: sh scripts/build-installer.sh
+; Kinlink installer (Inno Setup 6). Build: sh scripts/build-installer.sh
 #ifndef AppVersion
   #define AppVersion "0.0.0-dev"
 #endif
@@ -7,10 +7,10 @@
 
 [Setup]
 AppId={{6D2B6F0E-3C1A-4E7B-9A51-2F7C0B8E4D19}
-AppName=Parsec Clone
+AppName=Kinlink
 AppVersion={#AppVersion}
-AppPublisher=Parsec Clone
-DefaultDirName={autopf}\Parsec Clone
+AppPublisher=Abdulkareem Alsaou
+DefaultDirName={autopf}\Kinlink
 DisableProgramGroupPage=yes
 PrivilegesRequired=admin
 UsedUserAreasWarning=no
@@ -18,13 +18,14 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir=..\dist
-OutputBaseFilename=ParsecClone-Setup
+OutputBaseFilename=Kinlink-Setup
+SetupIconFile=..\native\assets\kinlink.ico
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 CloseApplications=force
-UninstallDisplayIcon={app}\ParsecClone.exe
-UninstallDisplayName=Parsec Clone
+UninstallDisplayIcon={app}\Kinlink.exe
+UninstallDisplayName=Kinlink
 
 [Tasks]
 Name: startup; Description: "Start with Windows (runs in the tray)"
@@ -33,26 +34,27 @@ Name: helper; Description: "Control the lock screen and admin prompts (backgroun
 Name: desktopicon; Description: "Desktop shortcut"; Flags: unchecked
 
 [Files]
-Source: "..\native\target\release\pclone.exe"; DestDir: "{app}"; DestName: "ParsecClone.exe"; Flags: ignoreversion
+Source: "..\native\target\release\pclone.exe"; DestDir: "{app}"; DestName: "Kinlink.exe"; Flags: ignoreversion
 
 [Icons]
 ; The app makes its own Start menu entry on first run (needed for its notifications).
-Name: "{autodesktop}\Parsec Clone"; Filename: "{app}\ParsecClone.exe"; Tasks: desktopicon
+Name: "{autodesktop}\Kinlink"; Filename: "{app}\Kinlink.exe"; Tasks: desktopicon
 
 [Registry]
 ; Same value the app's own "Start with Windows" switch uses.
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "ParsecCloneNative"; ValueData: """{app}\ParsecClone.exe"" --minimized"; Tasks: startup; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "ParsecCloneNative"; ValueData: """{app}\Kinlink.exe"" --minimized"; Tasks: startup; Flags: uninsdeletevalue
 
 [Run]
 Filename: "{tmp}\vigembus.exe"; Parameters: "/exenoui /qn /norestart"; StatusMsg: "Installing the controller driver (ViGEmBus)..."; Check: ViGEmDownloaded; Flags: waituntilterminated
-Filename: "{app}\ParsecClone.exe"; Parameters: "--install-service"; StatusMsg: "Installing the lock screen helper..."; Tasks: helper; Flags: runhidden waituntilterminated
-Filename: "{app}\ParsecClone.exe"; Description: "Start Parsec Clone"; Flags: postinstall nowait skipifsilent runasoriginaluser
+Filename: "{app}\Kinlink.exe"; Parameters: "--install-service"; StatusMsg: "Installing the lock screen helper..."; Tasks: helper; Flags: runhidden waituntilterminated
+Filename: "{app}\Kinlink.exe"; Description: "Start Kinlink"; Flags: postinstall nowait skipifsilent runasoriginaluser
 
 [UninstallRun]
-Filename: "{app}\ParsecClone.exe"; Parameters: "--uninstall-service"; RunOnceId: "helper"; Flags: runhidden waituntilterminated
+Filename: "{app}\Kinlink.exe"; Parameters: "--uninstall-service"; RunOnceId: "helper"; Flags: runhidden waituntilterminated
 
 [UninstallDelete]
-Type: files; Name: "{app}\ParsecClone.exe.old"
+Type: files; Name: "{app}\Kinlink.exe.old"
+Type: files; Name: "{userprograms}\Kinlink.lnk"
 Type: files; Name: "{userprograms}\Parsec Clone.lnk"
 
 [Code]
@@ -86,7 +88,7 @@ begin
         DownloadPage.Download;
       except
         if not DownloadPage.AbortedByUser then
-          SuppressibleMsgBox('Couldn''t download the controller driver (' + GetExceptionMessage + '). Parsec Clone will install without it.', mbError, MB_OK, IDOK);
+          SuppressibleMsgBox('Couldn''t download the controller driver (' + GetExceptionMessage + '). Kinlink will install without it.', mbError, MB_OK, IDOK);
       end;
     finally
       DownloadPage.Hide;
@@ -100,6 +102,16 @@ var
   Code: Integer;
 begin
   Result := '';
-  if FileExists(ExpandConstant('{app}\ParsecClone.exe')) then
+  // Also covers installs from before the rename (ParsecClone.exe in the same folder).
+  if FileExists(ExpandConstant('{app}\Kinlink.exe')) then
+    Exec(ExpandConstant('{app}\Kinlink.exe'), '--uninstall-service', '', SW_HIDE, ewWaitUntilTerminated, Code)
+  else if FileExists(ExpandConstant('{app}\ParsecClone.exe')) then
     Exec(ExpandConstant('{app}\ParsecClone.exe'), '--uninstall-service', '', SW_HIDE, ewWaitUntilTerminated, Code);
+end;
+
+// Remove the pre-rename exe once the new one is in place.
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    DeleteFile(ExpandConstant('{app}\ParsecClone.exe'));
 end;
