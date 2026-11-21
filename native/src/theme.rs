@@ -1,25 +1,51 @@
 //! Kinlink "Midnight" look: colors, fonts, the logo, simple drawn icons and a few widgets.
 use egui::{Color32, CornerRadius, FontFamily, FontId, Painter, Pos2, Rect, Response, RichText, Sense, Stroke, Ui, Vec2, pos2, vec2};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
-pub const BG: Color32 = Color32::from_rgb(0x0B, 0x10, 0x20);
-pub const SIDEBAR: Color32 = Color32::from_rgb(0x0F, 0x16, 0x29);
-pub const CARD: Color32 = Color32::from_rgb(0x12, 0x1A, 0x2E);
-pub const FIELD: Color32 = Color32::from_rgb(0x14, 0x1C, 0x33);
-pub const HOVER: Color32 = Color32::from_rgb(0x1B, 0x23, 0x40);
-pub const LINE: Color32 = Color32::from_rgb(0x22, 0x2C, 0x47);
-pub const LINE2: Color32 = Color32::from_rgb(0x2A, 0x35, 0x57);
-pub const TEXT: Color32 = Color32::from_rgb(0xE8, 0xEC, 0xF8);
-pub const SOFT: Color32 = Color32::from_rgb(0xB4, 0xBE, 0xD8);
-pub const MUTED: Color32 = Color32::from_rgb(0x8E, 0x9A, 0xB9);
-pub const ACCENT: Color32 = Color32::from_rgb(0x7C, 0x6C, 0xFF);
-pub const ACCENT_SOFT: Color32 = Color32::from_rgb(0xA9, 0x9F, 0xFF);
-pub const ACCENT_BG: Color32 = Color32::from_rgb(0x17, 0x16, 0x3A);
-pub const ACCENT_LINE: Color32 = Color32::from_rgb(0x34, 0x30, 0x7A);
-pub const MINT: Color32 = Color32::from_rgb(0x3D, 0xDC, 0x97);
-pub const MINT_SOFT: Color32 = Color32::from_rgb(0x9D, 0xE8, 0xC4);
-pub const DANGER: Color32 = Color32::from_rgb(0xFF, 0x9D, 0xB5);
-pub const DANGER_BG: Color32 = Color32::from_rgb(0x3A, 0x14, 0x26);
+static LIGHT: AtomicBool = AtomicBool::new(false);
+
+/// Light or dark (Settings). Call apply() afterwards.
+pub fn set_light(on: bool) {
+    LIGHT.store(on, Relaxed);
+}
+
+pub fn is_light() -> bool {
+    LIGHT.load(Relaxed)
+}
+
+macro_rules! colors {
+    ($($name:ident = ($($d:expr),*), ($($l:expr),*);)*) => {$(
+        #[allow(non_snake_case)]
+        #[inline]
+        pub fn $name() -> Color32 {
+            if LIGHT.load(Relaxed) { Color32::from_rgb($($l),*) } else { Color32::from_rgb($($d),*) }
+        }
+    )*};
+}
+
+// name = (dark), (light)
+colors! {
+    BG = (0x0B, 0x10, 0x20), (0xF4, 0xF6, 0xFB);
+    SIDEBAR = (0x0F, 0x16, 0x29), (0xEA, 0xEE, 0xF7);
+    CARD = (0x12, 0x1A, 0x2E), (0xFF, 0xFF, 0xFF);
+    FIELD = (0x14, 0x1C, 0x33), (0xEE, 0xF1, 0xF8);
+    HOVER = (0x1B, 0x23, 0x40), (0xE3, 0xE8, 0xF4);
+    LINE = (0x22, 0x2C, 0x47), (0xD9, 0xDF, 0xEC);
+    LINE2 = (0x2A, 0x35, 0x57), (0xC9, 0xD1, 0xE3);
+    TEXT = (0xE8, 0xEC, 0xF8), (0x14, 0x1A, 0x2E);
+    SOFT = (0xB4, 0xBE, 0xD8), (0x3F, 0x48, 0x66);
+    MUTED = (0x8E, 0x9A, 0xB9), (0x6B, 0x75, 0x91);
+    ACCENT = (0x7C, 0x6C, 0xFF), (0x6A, 0x5A, 0xF0);
+    ACCENT_SOFT = (0xA9, 0x9F, 0xFF), (0x55, 0x45, 0xD8);
+    ACCENT_BG = (0x17, 0x16, 0x3A), (0xEC, 0xE9, 0xFF);
+    ACCENT_LINE = (0x34, 0x30, 0x7A), (0xB9, 0xB1, 0xFF);
+    MINT = (0x3D, 0xDC, 0x97), (0x1F, 0xA9, 0x71);
+    MINT_SOFT = (0x9D, 0xE8, 0xC4), (0x17, 0x86, 0x5A);
+    DANGER = (0xFF, 0x9D, 0xB5), (0xD6, 0x33, 0x5A);
+    DANGER_BG = (0x3A, 0x14, 0x26), (0xFD, 0xE7, 0xEC);
+}
+
 
 /// Font family for headings and names (Manrope ExtraBold).
 pub fn bold() -> FontFamily {
@@ -66,29 +92,29 @@ pub fn apply(ctx: &egui::Context) {
         s.spacing.button_padding = vec2(12.0, 7.0);
         s.spacing.interact_size.y = 30.0;
         let v = &mut s.visuals;
-        *v = egui::Visuals::dark();
-        v.panel_fill = BG;
-        v.window_fill = CARD;
-        v.window_stroke = Stroke::new(1.0, ACCENT_LINE);
+        *v = if is_light() { egui::Visuals::light() } else { egui::Visuals::dark() };
+        v.panel_fill = BG();
+        v.window_fill = CARD();
+        v.window_stroke = Stroke::new(1.0, ACCENT_LINE());
         v.window_corner_radius = CornerRadius::same(16);
-        v.extreme_bg_color = FIELD;
-        v.faint_bg_color = CARD;
-        v.override_text_color = Some(TEXT);
-        v.hyperlink_color = ACCENT_SOFT;
-        v.selection.bg_fill = ACCENT;
+        v.extreme_bg_color = FIELD();
+        v.faint_bg_color = CARD();
+        v.override_text_color = Some(TEXT());
+        v.hyperlink_color = ACCENT_SOFT();
+        v.selection.bg_fill = ACCENT();
         v.selection.stroke = Stroke::new(1.0, Color32::WHITE);
         v.slider_trailing_fill = true; // violet track up to the knob
         let w = &mut v.widgets;
-        for (st, fill, stroke) in [(&mut w.noninteractive, CARD, LINE), (&mut w.inactive, FIELD, LINE2), (&mut w.hovered, HOVER, ACCENT_LINE), (&mut w.active, ACCENT, ACCENT), (&mut w.open, HOVER, ACCENT_LINE)] {
+        for (st, fill, stroke) in [(&mut w.noninteractive, CARD(), LINE()), (&mut w.inactive, FIELD(), LINE2()), (&mut w.hovered, HOVER(), ACCENT_LINE()), (&mut w.active, ACCENT(), ACCENT()), (&mut w.open, HOVER(), ACCENT_LINE())] {
             st.bg_fill = fill;
             st.weak_bg_fill = fill;
             st.bg_stroke = Stroke::new(1.0, stroke);
             st.corner_radius = CornerRadius::same(10);
             st.expansion = 0.0;
         }
-        w.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
-        w.inactive.fg_stroke = Stroke::new(1.5, TEXT);
-        w.hovered.fg_stroke = Stroke::new(1.5, Color32::WHITE);
+        w.noninteractive.fg_stroke = Stroke::new(1.0, TEXT());
+        w.inactive.fg_stroke = Stroke::new(1.5, TEXT());
+        w.hovered.fg_stroke = Stroke::new(1.5, if is_light() { TEXT() } else { Color32::WHITE });
         w.active.fg_stroke = Stroke::new(1.5, Color32::WHITE);
     });
 }
@@ -103,14 +129,14 @@ pub fn logo(p: &Painter, r: Rect, tile: bool) {
     }
     let c = |x: f32, y: f32| pos2(r.min.x + x * s, r.min.y + y * s);
     let w = 4.4 * s;
-    p.circle_stroke(c(23.0, 32.0), 12.0 * s, Stroke::new(w, ACCENT));
-    p.circle_stroke(c(41.0, 32.0), 12.0 * s, Stroke::new(w, MINT));
+    p.circle_stroke(c(23.0, 32.0), 12.0 * s, Stroke::new(w, ACCENT()));
+    p.circle_stroke(c(41.0, 32.0), 12.0 * s, Stroke::new(w, MINT()));
     // violet passes over green at the top crossing
     let pts: Vec<Pos2> = (0..=12).map(|i| {
         let a = (-64.0 + 44.0 * i as f32 / 12.0f32).to_radians();
         c(23.0 + 12.0 * a.cos(), 32.0 + 12.0 * a.sin())
     }).collect();
-    p.add(egui::Shape::line(pts, Stroke::new(w, ACCENT)));
+    p.add(egui::Shape::line(pts, Stroke::new(w, ACCENT())));
 }
 
 #[derive(Clone, Copy)]
@@ -293,11 +319,11 @@ pub fn icon(p: &Painter, r: Rect, i: Icon, color: Color32) {
 
 /// Rounded card with the Midnight border.
 pub fn card() -> egui::Frame {
-    egui::Frame::NONE.fill(CARD).stroke(Stroke::new(1.0, LINE)).corner_radius(14.0).inner_margin(egui::Margin::same(14))
+    egui::Frame::NONE.fill(CARD()).stroke(Stroke::new(1.0, LINE())).corner_radius(14.0).inner_margin(egui::Margin::same(14))
 }
 
 pub fn section(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text.to_uppercase()).size(11.0).color(MUTED).strong());
+    ui.label(RichText::new(text.to_uppercase()).size(11.0).color(MUTED()).strong());
 }
 
 pub fn title(ui: &mut Ui, text: &str, sub: Option<&str>) {
@@ -305,7 +331,7 @@ pub fn title(ui: &mut Ui, text: &str, sub: Option<&str>) {
         ui.spacing_mut().item_spacing.y = 2.0;
         ui.label(RichText::new(text).font(FontId::new(24.0, bold())));
         if let Some(s) = sub {
-            ui.label(RichText::new(s).size(13.0).color(MUTED));
+            ui.label(RichText::new(s).size(13.0).color(MUTED()));
         }
     });
 }
@@ -317,11 +343,11 @@ pub fn primary(ui: &mut Ui, text: &str, icon_kind: Option<Icon>, enabled: bool) 
     let iw = if icon_kind.is_some() { 20.0 } else { 0.0 };
     let size = vec2(galley.size().x + 32.0 + iw, 36.0);
     let (rect, resp) = ui.allocate_exact_size(size, if enabled { Sense::click() } else { Sense::hover() });
-    let fill = if !enabled { LINE } else if resp.is_pointer_button_down_on() { Color32::from_rgb(0x6A, 0x5A, 0xF0) } else if resp.hovered() { Color32::from_rgb(0x8E, 0x80, 0xFF) } else { ACCENT };
+    let fill = if !enabled { LINE() } else if resp.is_pointer_button_down_on() { Color32::from_rgb(0x6A, 0x5A, 0xF0) } else if resp.hovered() { Color32::from_rgb(0x8E, 0x80, 0xFF) } else { ACCENT() };
     let p = ui.painter();
     p.rect_filled(rect, 10.0, fill);
     let mut x = rect.min.x + 16.0;
-    let fg = if enabled { Color32::WHITE } else { MUTED };
+    let fg = if enabled { Color32::WHITE } else { MUTED() };
     if let Some(i) = icon_kind {
         icon(p, Rect::from_center_size(pos2(x + 7.0, rect.center().y), vec2(14.0, 14.0)), i, fg);
         x += iw;
@@ -338,8 +364,8 @@ pub fn primary(ui: &mut Ui, text: &str, icon_kind: Option<Icon>, enabled: bool) 
 pub fn icon_button(ui: &mut Ui, i: Icon, hint: &str, on: bool) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::click());
     let p = ui.painter();
-    p.rect(rect, 9.0, if on || resp.hovered() { HOVER } else { Color32::TRANSPARENT }, Stroke::new(1.0, LINE2), egui::StrokeKind::Inside);
-    icon(p, Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), i, SOFT);
+    p.rect(rect, 9.0, if on || resp.hovered() { HOVER() } else { Color32::TRANSPARENT }, Stroke::new(1.0, LINE2()), egui::StrokeKind::Inside);
+    icon(p, Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), i, SOFT());
     resp.on_hover_text(hint)
 }
 
@@ -350,22 +376,22 @@ pub fn avatar(ui: &mut Ui, name: &str, online: Option<bool>, size: f32) {
     let h = name.bytes().fold(0usize, |a, b| a.wrapping_mul(31).wrapping_add(b as usize)) % hues.len();
     let (br, bg, bb, fr, fg, fb) = hues[h];
     let online_known = online.is_some();
-    let (bgc, fgc) = if online == Some(false) { (Color32::from_rgb(0x1C, 0x24, 0x40), MUTED) } else { (Color32::from_rgb(br, bg, bb), Color32::from_rgb(fr, fg, fb)) };
+    let (bgc, fgc) = if online == Some(false) { (Color32::from_rgb(0x1C, 0x24, 0x40), MUTED()) } else { (Color32::from_rgb(br, bg, bb), Color32::from_rgb(fr, fg, fb)) };
     let p = ui.painter();
     p.rect_filled(rect, size * 0.28, bgc);
     let letter = name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "?".into());
     p.text(rect.center(), egui::Align2::CENTER_CENTER, letter, FontId::new(size * 0.42, bold()), fgc);
     if online_known && online == Some(true) {
         let c = pos2(rect.max.x - 2.0, rect.max.y - 2.0);
-        p.circle_filled(c, 6.5, CARD);
-        p.circle_filled(c, 4.5, MINT);
+        p.circle_filled(c, 6.5, CARD());
+        p.circle_filled(c, 4.5, MINT());
     }
 }
 
 /// iOS-style switch with a label; returns true when flipped.
 pub fn switch(ui: &mut Ui, on: &mut bool, label: &str) -> bool {
     let font = FontId::proportional(13.5);
-    let galley = ui.painter().layout_no_wrap(label.to_string(), font, TEXT);
+    let galley = ui.painter().layout_no_wrap(label.to_string(), font, TEXT());
     let (rect, resp) = ui.allocate_exact_size(vec2(44.0 + galley.size().x, 24.0), Sense::click());
     if resp.clicked() {
         *on = !*on;
@@ -373,9 +399,9 @@ pub fn switch(ui: &mut Ui, on: &mut bool, label: &str) -> bool {
     let t = ui.ctx().animate_bool(resp.id, *on);
     let track = Rect::from_min_size(pos2(rect.min.x, rect.center().y - 10.0), vec2(34.0, 20.0));
     let p = ui.painter();
-    p.rect_filled(track, 10.0, if *on { ACCENT } else { LINE2 });
+    p.rect_filled(track, 10.0, if *on { ACCENT() } else { LINE2() });
     p.circle_filled(pos2(track.min.x + 10.0 + t * 14.0, track.center().y), 8.0, Color32::WHITE);
-    p.galley(pos2(track.max.x + 10.0, rect.center().y - galley.size().y / 2.0), galley, TEXT);
+    p.galley(pos2(track.max.x + 10.0, rect.center().y - galley.size().y / 2.0), galley, TEXT());
     resp.clicked()
 }
 
@@ -384,14 +410,14 @@ pub fn nav(ui: &mut Ui, i: Icon, text: &str, active: bool, badge: Option<usize>)
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
     let p = ui.painter();
     if active || resp.hovered() {
-        p.rect_filled(rect, 10.0, if active { HOVER } else { Color32::from_rgb(0x15, 0x1D, 0x35) });
+        p.rect_filled(rect, 10.0, if active { HOVER() } else { Color32::from_rgb(0x15, 0x1D, 0x35) });
     }
-    let fg = if active { Color32::WHITE } else { SOFT };
-    icon(p, Rect::from_center_size(pos2(rect.min.x + 21.0, rect.center().y), vec2(18.0, 18.0)), i, if active { ACCENT_SOFT } else { fg });
+    let fg = if active { Color32::WHITE } else { SOFT() };
+    icon(p, Rect::from_center_size(pos2(rect.min.x + 21.0, rect.center().y), vec2(18.0, 18.0)), i, if active { ACCENT_SOFT() } else { fg });
     p.text(pos2(rect.min.x + 42.0, rect.center().y), egui::Align2::LEFT_CENTER, text, FontId::new(14.0, if active { bold() } else { FontFamily::Proportional }), fg);
     if let Some(n) = badge.filter(|n| *n > 0) {
         let c = pos2(rect.max.x - 18.0, rect.center().y);
-        p.rect_filled(Rect::from_center_size(c, vec2(22.0, 18.0)), 9.0, ACCENT);
+        p.rect_filled(Rect::from_center_size(c, vec2(22.0, 18.0)), 9.0, ACCENT());
         p.text(c, egui::Align2::CENTER_CENTER, n.to_string(), FontId::new(11.0, bold()), Color32::WHITE);
     }
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -403,7 +429,7 @@ pub fn tile(ui: &mut Ui, i: Icon, label: &str, on: Option<Color32>, w: f32) -> R
     let p = ui.painter();
     let (fill, stroke, fg) = match on {
         Some(c) => (c.gamma_multiply(0.18), c.gamma_multiply(0.55), c),
-        None => (if resp.hovered() { HOVER } else { FIELD }, LINE2, TEXT),
+        None => (if resp.hovered() { HOVER() } else { FIELD() }, LINE2(), TEXT()),
     };
     p.rect(rect, 11.0, fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
     icon(p, Rect::from_center_size(pos2(rect.center().x, rect.min.y + 21.0), vec2(18.0, 18.0)), i, fg);
@@ -415,8 +441,8 @@ pub fn tile(ui: &mut Ui, i: Icon, label: &str, on: Option<Color32>, w: f32) -> R
 pub fn danger_wide(ui: &mut Ui, text: &str, enabled: bool) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), if enabled { Sense::click() } else { Sense::hover() });
     let p = ui.painter();
-    p.rect_filled(rect, 10.0, if resp.hovered() && enabled { Color32::from_rgb(0x55, 0x18, 0x34) } else { DANGER_BG });
-    p.text(rect.center(), egui::Align2::CENTER_CENTER, text, FontId::new(13.5, bold()), if enabled { DANGER } else { DANGER.gamma_multiply(0.5) });
+    p.rect_filled(rect, 10.0, if resp.hovered() && enabled { Color32::from_rgb(0x55, 0x18, 0x34) } else { DANGER_BG() });
+    p.text(rect.center(), egui::Align2::CENTER_CENTER, text, FontId::new(13.5, bold()), if enabled { DANGER() } else { DANGER().gamma_multiply(0.5) });
     resp
 }
 

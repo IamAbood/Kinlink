@@ -128,3 +128,64 @@ pub fn window_flags(activity: usize, add: i32, clear: i32) {
         log::error!("window flags: {e}");
     }
 }
+
+/// Asks for notification permission (Android 13+; older versions allow them by default).
+pub fn ask_notifications() {
+    let ctx = ndk_context::android_context();
+    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) };
+    let r: Result<(), jni::errors::Error> = vm.attach_current_thread(|env| {
+        let sdk = env.get_static_field(jni_str!("android/os/Build$VERSION"), jni_str!("SDK_INT"), jni_sig!("I"))?.i()?;
+        if sdk < 33 {
+            return Ok(());
+        }
+        let activity = unsafe { JObject::from_raw(env, ctx.context().cast()) };
+        let perm = env.new_string("android.permission.POST_NOTIFICATIONS")?;
+        let granted = env.call_method(&activity, jni_str!("checkSelfPermission"), jni_sig!("(Ljava/lang/String;)I"), &[JValue::Object(&perm)])?.i()? == 0;
+        if !granted {
+            let arr = env.new_object_array(1, jni_str!("java/lang/String"), &perm)?;
+            env.call_method(&activity, jni_str!("requestPermissions"), jni_sig!("([Ljava/lang/String;I)V"), &[JValue::Object(&arr), JValue::Int(2)])?;
+        }
+        Ok(())
+    });
+    if let Err(e) = r {
+        log::error!("notification permission: {e}");
+    }
+}
+
+/// Shows an Android notification; tapping it opens Kinlink.
+pub fn notify(id: i32, title: &str, text: &str) {
+    let ctx = ndk_context::android_context();
+    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) };
+    let r: Result<(), jni::errors::Error> = vm.attach_current_thread(|env| {
+        let app = unsafe { JObject::from_raw(env, ctx.context().cast()) };
+        let svc = env.new_string("notification")?;
+        let nm = env.call_method(&app, jni_str!("getSystemService"), jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"), &[JValue::Object(&svc)])?.l()?;
+        let chan_id = env.new_string("kinlink")?;
+        let chan_name = env.new_string("Kinlink")?;
+        // IMPORTANCE_DEFAULT = 3
+        let chan = env.new_object(jni_str!("android/app/NotificationChannel"), jni_sig!("(Ljava/lang/String;Ljava/lang/CharSequence;I)V"), &[JValue::Object(&chan_id), JValue::Object(&chan_name), JValue::Int(3)])?;
+        env.call_method(&nm, jni_str!("createNotificationChannel"), jni_sig!("(Landroid/app/NotificationChannel;)V"), &[JValue::Object(&chan)])?;
+        let info = env.call_method(&app, jni_str!("getApplicationInfo"), jni_sig!("()Landroid/content/pm/ApplicationInfo;"), &[])?.l()?;
+        let icon = env.get_field(&info, jni_str!("icon"), jni_sig!("I"))?.i()?;
+        let b = env.new_object(jni_str!("android/app/Notification$Builder"), jni_sig!("(Landroid/content/Context;Ljava/lang/String;)V"), &[JValue::Object(&app), JValue::Object(&chan_id)])?;
+        let (jt, jx) = (env.new_string(title)?, env.new_string(text)?);
+        env.call_method(&b, jni_str!("setSmallIcon"), jni_sig!("(I)Landroid/app/Notification$Builder;"), &[JValue::Int(icon)])?;
+        env.call_method(&b, jni_str!("setContentTitle"), jni_sig!("(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;"), &[JValue::Object(&jt)])?;
+        env.call_method(&b, jni_str!("setContentText"), jni_sig!("(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;"), &[JValue::Object(&jx)])?;
+        env.call_method(&b, jni_str!("setAutoCancel"), jni_sig!("(Z)Landroid/app/Notification$Builder;"), &[JValue::Bool(true)])?;
+        // Tap: open Kinlink (FLAG_IMMUTABLE).
+        let pm = env.call_method(&app, jni_str!("getPackageManager"), jni_sig!("()Landroid/content/pm/PackageManager;"), &[])?.l()?;
+        let pkg = env.call_method(&app, jni_str!("getPackageName"), jni_sig!("()Ljava/lang/String;"), &[])?.l()?;
+        let launch = env.call_method(&pm, jni_str!("getLaunchIntentForPackage"), jni_sig!("(Ljava/lang/String;)Landroid/content/Intent;"), &[JValue::Object(&pkg)])?.l()?;
+        if !launch.is_null() {
+            let pi = env.call_static_method(jni_str!("android/app/PendingIntent"), jni_str!("getActivity"), jni_sig!("(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;"), &[JValue::Object(&app), JValue::Int(0), JValue::Object(&launch), JValue::Int(0x0400_0000)])?.l()?;
+            env.call_method(&b, jni_str!("setContentIntent"), jni_sig!("(Landroid/app/PendingIntent;)Landroid/app/Notification$Builder;"), &[JValue::Object(&pi)])?;
+        }
+        let n = env.call_method(&b, jni_str!("build"), jni_sig!("()Landroid/app/Notification;"), &[])?.l()?;
+        env.call_method(&nm, jni_str!("notify"), jni_sig!("(ILandroid/app/Notification;)V"), &[JValue::Int(id), JValue::Object(&n)])?;
+        Ok(())
+    });
+    if let Err(e) = r {
+        log::error!("notification: {e}");
+    }
+}

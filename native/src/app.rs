@@ -34,7 +34,7 @@ const SC_C: u16 = 0x2E;
 const SC_P: u16 = 0x19;
 const SC_V: u16 = 0x2F;
 
-const GREEN: Color32 = crate::theme::MINT;
+const GREEN: Color32 = Color32::from_rgb(0x3D, 0xDC, 0x97);
 const RED: Color32 = Color32::from_rgb(0xFF, 0x7A, 0x96);
 const RESOLUTIONS: &[(&str, u32)] = &[("Native", 0), ("1440p", 1440), ("1080p", 1080), ("900p", 900), ("720p", 720), ("540p", 540)];
 const QUALITIES: &[(&str, u32)] = &[("Low (5 Mbps)", 5), ("Medium (10 Mbps)", 10), ("High (20 Mbps)", 20), ("Very high (35 Mbps)", 35), ("Max (60 Mbps)", 60)];
@@ -861,14 +861,14 @@ impl App {
     fn setup_ui(&mut self, root: &mut egui::Ui) {
         use crate::theme as t;
         let mut go = false;
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t::BG)).show(root, |ui| {
+        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t::BG())).show(root, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space((ui.available_height() / 2.0 - 220.0).max(30.0));
                 let (r, _) = ui.allocate_exact_size(egui::vec2(84.0, 84.0), egui::Sense::hover());
                 t::logo(ui.painter(), r, true);
                 ui.add_space(10.0);
                 ui.label(RichText::new(tr("Welcome to Kinlink")).font(egui::FontId::new(28.0, t::bold())));
-                para(ui, &tl("Pick a username. Friends add you with it, plus a tag\nonly your PC can own. No account, no password."), 14.0, t::SOFT);
+                para(ui, &tl("Pick a username. Friends add you with it, plus a tag\nonly your PC can own. No account, no password."), 14.0, t::SOFT());
                 ui.add_space(14.0);
                 let r = ui.add(egui::TextEdit::singleline(&mut self.setup_name).hint_text(tr("username")).desired_width(300.0).margin(egui::vec2(14.0, 11.0)).font(egui::FontId::new(16.0, t::bold())));
                 if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -878,9 +878,9 @@ impl App {
                 if t::primary(ui, &tr("Continue"), None, true).clicked() {
                     go = true;
                 }
-                ui.label(RichText::new(tr("2–20 letters or numbers")).size(12.0).color(t::MUTED));
+                ui.label(RichText::new(tr("2–20 letters or numbers")).size(12.0).color(t::MUTED()));
                 if let Some(e) = &self.setup_err {
-                    ui.colored_label(t::DANGER, crate::rtl::show(e));
+                    ui.colored_label(t::DANGER(), crate::rtl::show(e));
                 }
                 ui.add_space(14.0);
                 let dir = if crate::i18n::arabic() { egui::Layout::right_to_left(egui::Align::Center) } else { egui::Layout::left_to_right(egui::Align::Center) };
@@ -888,17 +888,17 @@ impl App {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     let w = 330.0;
                     ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
-                    ui.label(RichText::new(tr("By continuing you agree to the")).size(12.0).color(t::MUTED));
+                    ui.label(RichText::new(tr("By continuing you agree to the")).size(12.0).color(t::MUTED()));
                     if ui.link(RichText::new(tr("Terms of Use")).size(12.0)).clicked() {
                         open_url("https://github.com/IamAbood/Kinlink/blob/main/TERMS.md");
                     }
-                    ui.label(RichText::new(tr("and")).size(12.0).color(t::MUTED));
+                    ui.label(RichText::new(tr("and")).size(12.0).color(t::MUTED()));
                     if ui.link(RichText::new(tr("Privacy Policy")).size(12.0)).clicked() {
                         open_url("https://github.com/IamAbood/Kinlink/blob/main/PRIVACY.md");
                     }
                 });
                 ui.add_space(16.0);
-                ui.label(RichText::new(tr("Made by Abdulkareem Alsaou")).size(12.0).color(t::MUTED));
+                ui.label(RichText::new(tr("Made by Abdulkareem Alsaou")).size(12.0).color(t::MUTED()));
             });
         });
         if go {
@@ -929,7 +929,7 @@ impl App {
                 .title_bar(false)
                 .collapsible(false)
                 .resizable(false)
-                .frame(egui::Frame::NONE.fill(Color32::from_rgb(0x16, 0x1F, 0x3A)).stroke(egui::Stroke::new(1.0, t::ACCENT_LINE)).corner_radius(16.0).inner_margin(egui::Margin::same(18)).shadow(egui::Shadow { offset: [0, 14], blur: 40, spread: 0, color: Color32::from_black_alpha(140) }))
+                .frame(egui::Frame::NONE.fill(Color32::from_rgb(0x16, 0x1F, 0x3A)).stroke(egui::Stroke::new(1.0, t::ACCENT_LINE())).corner_radius(16.0).inner_margin(egui::Margin::same(18)).shadow(egui::Shadow { offset: [0, 14], blur: 40, spread: 0, color: Color32::from_black_alpha(140) }))
                 .anchor(egui::Align2::RIGHT_BOTTOM, [-24.0, -24.0 - i as f32 * 170.0])
                 .show(ctx, |ui| {
                     ui.set_width(300.0);
@@ -938,15 +938,15 @@ impl App {
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 1.0;
                             ui.label(RichText::new(&p.name).font(egui::FontId::new(14.0, t::bold())));
-                            ui.label(RichText::new(tr("wants to connect to this PC")).size(12.0).color(t::MUTED));
+                            ui.label(RichText::new(tr("wants to connect to this PC")).size(12.0).color(t::MUTED()));
                         });
                     });
                     if let Some(f) = &f {
                         let allowed: Vec<&str> = [(f.allow_mouse, "mouse"), (f.allow_keyboard, "keyboard"), (f.allow_gamepad, "controller")].iter().filter(|x| x.0).map(|x| x.1).collect();
                         let what = if allowed.is_empty() { tl("They can only watch (no mouse, keyboard or controller).") } else { tlf("Allowed: {}. Change it in Friends.", &[&allowed.iter().map(|a| tl(a)).collect::<Vec<_>>().join(", ")]) };
-                        para(ui, &what, 12.0, t::SOFT);
+                        para(ui, &what, 12.0, t::SOFT());
                     }
-                    ui.label(RichText::new(trf("Declines by itself in {}s", &[&left.to_string()])).size(11.0).color(t::MUTED));
+                    ui.label(RichText::new(trf("Declines by itself in {}s", &[&left.to_string()])).size(11.0).color(t::MUTED()));
                     ui.horizontal(|ui| {
                         if t::primary(ui, &tr("Accept"), None, true).clicked() {
                             decided = Some((i, true));
@@ -966,7 +966,7 @@ impl App {
                 .title_bar(false)
                 .collapsible(false)
                 .resizable(false)
-                .frame(egui::Frame::NONE.fill(Color32::from_rgb(0x16, 0x1F, 0x3A)).stroke(egui::Stroke::new(1.0, t::ACCENT_LINE)).corner_radius(16.0).inner_margin(egui::Margin::same(18)))
+                .frame(egui::Frame::NONE.fill(Color32::from_rgb(0x16, 0x1F, 0x3A)).stroke(egui::Stroke::new(1.0, t::ACCENT_LINE())).corner_radius(16.0).inner_margin(egui::Margin::same(18)))
                 .anchor(egui::Align2::LEFT_BOTTOM, [24.0, -24.0 - i as f32 * 150.0])
                 .show(ctx, |ui| {
                     ui.set_width(280.0);
@@ -974,7 +974,7 @@ impl App {
                         t::avatar(ui, &f.display(), None, 38.0);
                         ui.vertical(|ui| {
                             ui.label(RichText::new(f.display()).font(egui::FontId::new(14.0, t::bold())));
-                            ui.label(RichText::new(tr("is asking for your help")).size(12.0).color(t::MUTED));
+                            ui.label(RichText::new(tr("is asking for your help")).size(12.0).color(t::MUTED()));
                         });
                     });
                     ui.horizontal(|ui| {
@@ -1086,7 +1086,7 @@ impl App {
                 frame.show(ui, |ui| {
                     ui.horizontal(|ui| {
                         dot(ui, RED);
-                        ui.label(RichText::new(tr("REC")).font(egui::FontId::new(12.0, crate::theme::bold())).color(crate::theme::DANGER));
+                        ui.label(RichText::new(tr("REC")).font(egui::FontId::new(12.0, crate::theme::bold())).color(crate::theme::DANGER()));
                     });
                 });
             });
@@ -1120,7 +1120,7 @@ impl App {
         if let Some((text, at)) = self.bubble.clone() {
             if at.elapsed() < Duration::from_secs(6) && !self.chat_open {
                 egui::Area::new(egui::Id::new("bubble")).anchor(egui::Align2::CENTER_BOTTOM, [0.0, -22.0]).show(ctx, |ui| {
-                    egui::Frame::NONE.fill(Color32::from_rgba_unmultiplied(27, 35, 64, 245)).stroke(egui::Stroke::new(1.0, crate::theme::ACCENT_LINE)).corner_radius(20.0).inner_margin(egui::Margin::symmetric(16, 9)).show(ui, |ui| {
+                    egui::Frame::NONE.fill(Color32::from_rgba_unmultiplied(27, 35, 64, 245)).stroke(egui::Stroke::new(1.0, crate::theme::ACCENT_LINE())).corner_radius(20.0).inner_margin(egui::Margin::symmetric(16, 9)).show(ui, |ui| {
                         ui.label(RichText::new(crate::rtl::show(&text)).font(egui::FontId::new(13.0, crate::theme::bold())));
                     });
                 });
@@ -1145,14 +1145,14 @@ impl App {
                 egui::ScrollArea::vertical().max_height(240.0).stick_to_bottom(true).show(ui, |ui| {
                     ui.set_width(320.0);
                     if log.is_empty() {
-                        para(ui, &tl("Say hi. Messages go to everyone in this session."), 14.0, t::MUTED);
+                        para(ui, &tl("Say hi. Messages go to everyone in this session."), 14.0, t::MUTED());
                     }
                     for (from, text) in log.iter().rev().take(50).rev() {
                         let mine = from == "You";
                         let layout = if mine { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
                         ui.with_layout(layout, |ui| {
                             egui::Frame::NONE
-                                .fill(if mine { t::ACCENT } else { t::HOVER })
+                                .fill(if mine { t::ACCENT() } else { t::HOVER() })
                                 .corner_radius(if mine { egui::CornerRadius { nw: 12, ne: 12, sw: 12, se: 4 } } else { egui::CornerRadius { nw: 12, ne: 12, sw: 4, se: 12 } })
                                 .inner_margin(egui::Margin::symmetric(10, 7))
                                 .show(ui, |ui| {
@@ -1160,7 +1160,7 @@ impl App {
                                     ui.vertical(|ui| {
                                         ui.spacing_mut().item_spacing.y = 2.0;
                                         if !mine {
-                                            ui.label(RichText::new(crate::rtl::show(from)).size(11.0).color(t::ACCENT_SOFT));
+                                            ui.label(RichText::new(crate::rtl::show(from)).size(11.0).color(t::ACCENT_SOFT()));
                                         }
                                         ui.label(RichText::new(crate::rtl::show(text)).color(Color32::WHITE));
                                     });
@@ -1217,7 +1217,7 @@ impl App {
             let mut open = true;
             egui::Window::new(tr("Games on that PC")).open(&mut open).default_size([320.0, 380.0]).show(ctx, |ui| {
                 if games.is_empty() {
-                    para(ui, &tl("No Steam or Epic games found there (or you don't have mouse and keyboard control)."), 13.0, t::MUTED);
+                    para(ui, &tl("No Steam or Epic games found there (or you don't have mouse and keyboard control)."), 13.0, t::MUTED());
                 }
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     for g in &games {
@@ -1289,7 +1289,7 @@ impl App {
         let mut pick = false;
         let mut toggle_full = false;
         let is_full = self.window().is_some_and(|w| w.fullscreen().is_some());
-        let frame = egui::Frame::NONE.fill(Color32::from_rgba_unmultiplied(15, 22, 41, 246)).inner_margin(14.0).corner_radius(16.0).stroke(egui::Stroke::new(1.0, crate::theme::LINE2));
+        let frame = egui::Frame::NONE.fill(Color32::from_rgba_unmultiplied(15, 22, 41, 246)).inner_margin(14.0).corner_radius(16.0).stroke(egui::Stroke::new(1.0, crate::theme::LINE2()));
         let near_corner = self.pointer.is_some_and(|(x, y)| x < 180.0 && y < 140.0) && !self.relative;
         let reveal = near_corner || self.stream_started.elapsed() < Duration::from_secs(4);
         let mut toggle_rel = false;
@@ -1300,8 +1300,8 @@ impl App {
                 let (rect, resp) = ui.allocate_exact_size(egui::vec2(40.0, 32.0), egui::Sense::click());
                 let strong = resp.hovered();
                 let p = ui.painter();
-                p.rect(rect, 10.0, Color32::from_rgba_unmultiplied(11, 16, 32, if strong { 240 } else { 150 }), egui::Stroke::new(1.0, if strong { t::ACCENT_LINE } else { Color32::from_rgba_unmultiplied(52, 48, 122, 120) }), egui::StrokeKind::Inside);
-                t::icon(p, egui::Rect::from_center_size(rect.center(), egui::vec2(18.0, 18.0)), Icon::Menu, if strong { t::ACCENT_SOFT } else { t::SOFT });
+                p.rect(rect, 10.0, Color32::from_rgba_unmultiplied(11, 16, 32, if strong { 240 } else { 150 }), egui::Stroke::new(1.0, if strong { t::ACCENT_LINE() } else { Color32::from_rgba_unmultiplied(52, 48, 122, 120) }), egui::StrokeKind::Inside);
+                t::icon(p, egui::Rect::from_center_size(rect.center(), egui::vec2(18.0, 18.0)), Icon::Menu, if strong { t::ACCENT_SOFT() } else { t::SOFT() });
                 if resp.on_hover_text(tr("Menu")).clicked() {
                     self.overlay_open = true;
                     self.overlay_opened = Instant::now();
@@ -1319,9 +1319,9 @@ impl App {
                 ui.spacing_mut().item_spacing = egui::vec2(6.0, 10.0);
                 // header
                 ui.horizontal(|ui| {
-                    dot_fn(ui, if st.lost == 0 || st.rtt_ms < 80.0 { t::MINT } else { RED });
+                    dot_fn(ui, if st.lost == 0 || st.rtt_ms < 80.0 { t::MINT() } else { RED });
                     ui.label(RichText::new(crate::rtl::show(&self.peer)).font(egui::FontId::new(14.5, t::bold())));
-                    ui.label(RichText::new(format!("· {:.0} ms", st.rtt_ms)).color(t::MUTED));
+                    ui.label(RichText::new(format!("· {:.0} ms", st.rtt_ms)).color(t::MUTED()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if t::icon_button(ui, Icon::Close, &tr("Hide menu"), false).clicked() {
                             self.overlay_open = false;
@@ -1333,10 +1333,10 @@ impl App {
                 let mic = c.mic_on();
                 let rec = c.is_recording();
                 ui.horizontal(|ui| {
-                    if t::tile(ui, Icon::Mic, &if mic { tr("Mic on") } else { tr("Mic off") }, mic.then_some(t::MINT), w).on_hover_text(hk(&self.s, &tr("Voice chat · Ctrl+Alt+Shift+V · use headphones"))).clicked() {
+                    if t::tile(ui, Icon::Mic, &if mic { tr("Mic on") } else { tr("Mic off") }, mic.then_some(t::MINT()), w).on_hover_text(hk(&self.s, &tr("Voice chat · Ctrl+Alt+Shift+V · use headphones"))).clicked() {
                         c.set_mic(!mic);
                     }
-                    if t::tile(ui, Icon::Chat, &tr("Chat"), self.chat_open.then_some(t::ACCENT_SOFT), w).on_hover_text(hk(&self.s, &tr("Ctrl+Alt+Shift+C"))).clicked() {
+                    if t::tile(ui, Icon::Chat, &tr("Chat"), self.chat_open.then_some(t::ACCENT_SOFT()), w).on_hover_text(hk(&self.s, &tr("Ctrl+Alt+Shift+C"))).clicked() {
                         toggle_chat = true;
                     }
                     if t::tile(ui, Icon::Upload, &tr("Send file"), None, w).on_hover_text(tr("Or drag files onto this window")).clicked() {
@@ -1347,13 +1347,13 @@ impl App {
                     }
                 });
                 ui.horizontal(|ui| {
-                    if t::tile(ui, Icon::Record, &if rec { tr("Stop rec") } else { tr("Record") }, rec.then_some(t::DANGER), w).on_hover_text(tr("MP4 in Videos\\Kinlink")).clicked() {
+                    if t::tile(ui, Icon::Record, &if rec { tr("Stop rec") } else { tr("Record") }, rec.then_some(t::DANGER()), w).on_hover_text(tr("MP4 in Videos\\Kinlink")).clicked() {
                         if rec { c.stop_recording() } else { c.start_recording() }
                     }
                     if t::tile(ui, if is_full { Icon::Shrink } else { Icon::Expand }, &if is_full { tr("Windowed") } else { tr("Fullscreen") }, None, w).on_hover_text(hk(&self.s, &tr("Ctrl+Alt+Shift+F"))).clicked() {
                         toggle_full = true;
                     }
-                    if t::tile(ui, Icon::Lock, &tr("Lock mouse"), self.relative.then_some(t::ACCENT_SOFT), w).on_hover_text(hk(&self.s, &tr("For games · Ctrl+Alt+Shift+R to unlock"))).clicked() {
+                    if t::tile(ui, Icon::Lock, &tr("Lock mouse"), self.relative.then_some(t::ACCENT_SOFT()), w).on_hover_text(hk(&self.s, &tr("For games · Ctrl+Alt+Shift+R to unlock"))).clicked() {
                         toggle_rel = true;
                     }
                     if t::tile(ui, Icon::Hide, &tr("Hide all"), None, w).on_hover_text(hk(&self.s, &tr("Hides the menu button too · Ctrl+Alt+Shift+O brings it back"))).clicked() {
@@ -1361,19 +1361,19 @@ impl App {
                     }
                 });
                 ui.horizontal(|ui| {
-                    if t::tile(ui, Icon::Gamepad, &tr("Games"), self.games_open.then_some(t::ACCENT_SOFT), w).on_hover_text(tr("Start a game installed on that PC (Steam, Epic)")).clicked() {
+                    if t::tile(ui, Icon::Gamepad, &tr("Games"), self.games_open.then_some(t::ACCENT_SOFT()), w).on_hover_text(tr("Start a game installed on that PC (Steam, Epic)")).clicked() {
                         self.games_open = !self.games_open;
                         if self.games_open {
                             c.list_games();
                         }
                     }
-                    if t::tile(ui, Icon::Keyboard, &tr("Terminal"), self.term_open.then_some(t::ACCENT_SOFT), w).on_hover_text(tr("Run commands on that PC")).clicked() {
+                    if t::tile(ui, Icon::Keyboard, &tr("Terminal"), self.term_open.then_some(t::ACCENT_SOFT()), w).on_hover_text(tr("Run commands on that PC")).clicked() {
                         self.term_open = !self.term_open;
                     }
                 });
                 // stream settings
                 egui::Grid::new("ov").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                    ui.label(RichText::new(tr("Preset")).color(t::SOFT));
+                    ui.label(RichText::new(tr("Preset")).color(t::SOFT()));
                     ui.horizontal(|ui| {
                         for (name, r, q, sharp) in PRESETS {
                             let on = (self.res_idx, self.qual_idx, self.sharp) == (*r, *q, *sharp);
@@ -1384,14 +1384,14 @@ impl App {
                         }
                     });
                     ui.end_row();
-                    ui.label(RichText::new(tr("Resolution")).color(t::SOFT));
+                    ui.label(RichText::new(tr("Resolution")).color(t::SOFT()));
                     egui::ComboBox::from_id_salt("res").width(150.0).selected_text(tr(RESOLUTIONS[self.res_idx].0)).show_ui(ui, |ui| {
                         for (i, (name, _)) in RESOLUTIONS.iter().enumerate() {
                             quality_changed |= ui.selectable_value(&mut self.res_idx, i, tr(name)).changed();
                         }
                     });
                     ui.end_row();
-                    ui.label(RichText::new(tr("Quality")).color(t::SOFT));
+                    ui.label(RichText::new(tr("Quality")).color(t::SOFT()));
                     egui::ComboBox::from_id_salt("q").width(150.0).selected_text(tr(QUALITIES[self.qual_idx].0)).show_ui(ui, |ui| {
                         for (i, (name, _)) in QUALITIES.iter().enumerate() {
                             quality_changed |= ui.selectable_value(&mut self.qual_idx, i, tr(name)).changed();
@@ -1400,7 +1400,7 @@ impl App {
                     ui.end_row();
                     if let State::Connected { monitors, current, .. } = &state {
                         if monitors.len() > 1 {
-                            ui.label(RichText::new(tr("Monitor")).color(t::SOFT));
+                            ui.label(RichText::new(tr("Monitor")).color(t::SOFT()));
                             ui.horizontal(|ui| {
                                 for i in 0..monitors.len() {
                                     if ui.selectable_label(i == *current as usize, format!(" {} ", i + 1)).clicked() {
@@ -1414,7 +1414,7 @@ impl App {
                             ui.end_row();
                         }
                     }
-                    ui.label(RichText::new(tr("Volume")).color(t::SOFT));
+                    ui.label(RichText::new(tr("Volume")).color(t::SOFT()));
                     ui.horizontal(|ui| {
                         let a = ui.add(egui::Slider::new(&mut self.volume, 0..=100).show_value(false)).changed();
                         let b = ui.checkbox(&mut self.muted, tr("Mute")).changed();
@@ -1431,14 +1431,14 @@ impl App {
                         ui.label(RichText::new(trf("Host allows {}", &[&what])).color(Color32::from_rgb(0xFF, 0xC9, 0x8A)));
                     }
                 }
-                egui::Frame::NONE.fill(t::BG).corner_radius(9.0).inner_margin(egui::Margin::symmetric(10, 7)).show(ui, |ui| {
+                egui::Frame::NONE.fill(t::BG()).corner_radius(9.0).inner_margin(egui::Margin::symmetric(10, 7)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(RichText::new(format!("{:.0} fps · {:.0} ms · {:.1} Mbps · decode {:.1} ms · lost {}", st.fps, st.rtt_ms, st.mbps, st.decode_ms, st.lost)).monospace().size(11.0).color(t::MUTED));
+                    ui.label(RichText::new(format!("{:.0} fps · {:.0} ms · {:.1} Mbps · decode {:.1} ms · lost {}", st.fps, st.rtt_ms, st.mbps, st.decode_ms, st.lost)).monospace().size(11.0).color(t::MUTED()));
                 });
                 if ui.checkbox(&mut self.s.show_stats, tr("Keep these numbers on screen")).changed() {
                     self.s.save();
                 }
-                para(ui, &hk(&self.s, &tl("Ctrl+Alt+Shift: Q disconnect · O hide · R lock mouse · F fullscreen")), 11.0, t::MUTED);
+                para(ui, &hk(&self.s, &tl("Ctrl+Alt+Shift: Q disconnect · O hide · R lock mouse · F fullscreen")), 11.0, t::MUTED());
                 let fresh = self.overlay_opened.elapsed() < Duration::from_millis(500);
                 if t::danger_wide(ui, &tr("Disconnect"), !fresh).clicked() && !fresh {
                     disconnect = true;
@@ -1499,7 +1499,7 @@ impl App {
         egui::Panel::left("nav")
             .resizable(false)
             .exact_size(228.0)
-            .frame(egui::Frame::NONE.fill(t::SIDEBAR).inner_margin(egui::Margin::symmetric(14, 18)))
+            .frame(egui::Frame::NONE.fill(t::SIDEBAR()).inner_margin(egui::Margin::symmetric(14, 18)))
             .show(root, |ui| {
                 ui.horizontal(|ui| {
                     let (r, _) = ui.allocate_exact_size(egui::vec2(38.0, 38.0), egui::Sense::hover());
@@ -1507,7 +1507,7 @@ impl App {
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
                         ui.label(RichText::new(tr("Kinlink")).font(egui::FontId::new(17.0, t::bold())));
-                        ui.label(RichText::new(format!("v{}", crate::updater::current())).size(11.0).color(t::MUTED));
+                        ui.label(RichText::new(format!("v{}", crate::updater::current())).size(11.0).color(t::MUTED()));
                     });
                 });
                 ui.add_space(14.0);
@@ -1551,11 +1551,11 @@ impl App {
                             ui.add(egui::ProgressBar::new(p).desired_width(ui.available_width()).text("Updating…"));
                         }
                         Update::Failed(e) => {
-                            ui.colored_label(t::DANGER, tr("Update failed")).on_hover_text(e);
+                            ui.colored_label(t::DANGER(), tr("Update failed")).on_hover_text(e);
                         }
                         _ => {}
                     }
-                    t::card().fill(t::FIELD).show(ui, |ui| {
+                    t::card().fill(t::FIELD()).show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.spacing_mut().item_spacing.y = 6.0;
                         ui.horizontal(|ui| {
@@ -1572,7 +1572,7 @@ impl App {
                             let (name, tag) = id.split_once('#').unwrap_or((&id, ""));
                             ui.spacing_mut().item_spacing.x = 0.0;
                             ui.label(RichText::new(name).font(egui::FontId::new(14.0, t::bold())));
-                            ui.label(RichText::new(format!("#{tag}")).font(egui::FontId::new(14.0, t::bold())).color(t::ACCENT_SOFT));
+                            ui.label(RichText::new(format!("#{tag}")).font(egui::FontId::new(14.0, t::bold())).color(t::ACCENT_SOFT()));
                         });
                         // My status, shown to friends.
                         let presets = ["", "Busy", "Away", "In a game"];
@@ -1605,22 +1605,22 @@ impl App {
                         }
                         ui.horizontal(|ui| {
                             let (c, text) = if sig.online() {
-                                (t::MINT, if self.host.is_some() { tr("Online · hosting on") } else { tr("Online · hosting off") })
+                                (t::MINT(), if self.host.is_some() { tr("Online · hosting on") } else { tr("Online · hosting off") })
                             } else {
-                                (t::MUTED, tr("Connecting…"))
+                                (t::MUTED(), tr("Connecting…"))
                             };
                             dot(ui, c);
-                            ui.label(RichText::new(text).size(12.0).color(if sig.online() { t::MINT_SOFT } else { t::MUTED }));
+                            ui.label(RichText::new(text).size(12.0).color(if sig.online() { t::MINT_SOFT() } else { t::MUTED() }));
                         });
                     });
                     ui.vertical_centered(|ui| {
-                        ui.label(RichText::new(tr("Made by Abdulkareem Alsaou")).size(11.0).color(t::MUTED));
+                        ui.label(RichText::new(tr("Made by Abdulkareem Alsaou")).size(11.0).color(t::MUTED()));
                     });
                 });
             });
 
         // ------------------------------------------------ status bar (connecting, messages)
-        egui::Panel::bottom("bottom").frame(egui::Frame::NONE.fill(t::BG).inner_margin(egui::Margin::symmetric(30, 8))).show(root, |ui| {
+        egui::Panel::bottom("bottom").frame(egui::Frame::NONE.fill(t::BG()).inner_margin(egui::Margin::symmetric(30, 8))).show(root, |ui| {
             if let Some(o) = &self.outgoing {
                 let name = o.name.clone();
                 let mut cancel = false;
@@ -1648,12 +1648,12 @@ impl App {
                     }
                 });
             } else {
-                para(ui, &hk(&self.s, &tl("In a session: Ctrl+Alt+Shift + Q disconnect · O hide menu · R lock mouse · F fullscreen")), 11.0, t::MUTED);
+                para(ui, &hk(&self.s, &tl("In a session: Ctrl+Alt+Shift + Q disconnect · O hide menu · R lock mouse · F fullscreen")), 11.0, t::MUTED());
             }
         });
 
         // ------------------------------------------------ pages
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t::BG).inner_margin(egui::Margin { left: 30, right: 30, top: 24, bottom: 8 })).show(root, |ui| {
+        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t::BG()).inner_margin(egui::Margin { left: 30, right: 30, top: 24, bottom: 8 })).show(root, |ui| {
             egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 12.0;
                 match self.page {
@@ -1686,12 +1686,12 @@ impl App {
                             }
                         });
                         if let Some(e) = &self.add_err {
-                            ui.colored_label(t::DANGER, crate::rtl::show(e));
+                            ui.colored_label(t::DANGER(), crate::rtl::show(e));
                         }
                         for (id, p) in sig.incoming() {
-                            egui::Frame::NONE.fill(t::ACCENT_BG).stroke(egui::Stroke::new(1.0, t::ACCENT_LINE)).corner_radius(12.0).inner_margin(egui::Margin::symmetric(14, 10)).show(ui, |ui| {
+                            egui::Frame::NONE.fill(t::ACCENT_BG()).stroke(egui::Stroke::new(1.0, t::ACCENT_LINE())).corner_radius(12.0).inner_margin(egui::Margin::symmetric(14, 10)).show(ui, |ui| {
                                 ui.set_width(ui.available_width());
-                                para(ui, &tlf("Safety code {}: it must match on their screen. If it doesn't, decline.", &[&sig.safety_code(&p)]), 12.0, t::SOFT);
+                                para(ui, &tlf("Safety code {}: it must match on their screen. If it doesn't, decline.", &[&sig.safety_code(&p)]), 12.0, t::SOFT());
                                 ui.horizontal(|ui| {
                                     ui.label(RichText::new(&id).font(egui::FontId::new(14.0, t::bold())));
                                     ui.label(tr("wants to be friends"));
@@ -1708,16 +1708,16 @@ impl App {
                         }
                         for o in sig.outgoing_info() {
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new(trf("Waiting for {} to accept", &[&o.id])).italics().color(t::MUTED));
+                                ui.label(RichText::new(trf("Waiting for {} to accept", &[&o.id])).italics().color(t::MUTED()));
                                 if let Some(code) = &o.code {
-                                    ui.label(RichText::new(trf("· safety code {}", &[code])).color(t::SOFT));
+                                    ui.label(RichText::new(trf("· safety code {}", &[code])).color(t::SOFT()));
                                 }
                                 if ui.small_button(tr("Cancel")).clicked() {
                                     sig.cancel_request(&o.id);
                                 }
                             });
                             if o.conflict {
-                                para(ui, &tl("Two different PCs answered for this ID. Only accept if the safety code matches on your friend's screen."), 13.0, t::DANGER);
+                                para(ui, &tl("Two different PCs answered for this ID. Only accept if the safety code matches on your friend's screen."), 13.0, t::DANGER());
                             }
                         }
                         friends.sort_by_key(|(f, on)| (!on, f.display().to_lowercase()));
@@ -1725,7 +1725,7 @@ impl App {
                             t::card().show(ui, |ui| {
                                 ui.set_width(ui.available_width());
                                 ui.label(RichText::new(tr("No friends yet")).font(egui::FontId::new(16.0, t::bold())));
-                                para(ui, &tl("Send someone your ID (bottom left) and add theirs above. They accept, and you can connect."), 14.0, t::SOFT);
+                                para(ui, &tl("Send someone your ID (bottom left) and add theirs above. They accept, and you can connect."), 14.0, t::SOFT());
                             });
                         }
                         let mut groups: std::collections::BTreeMap<String, Vec<(Friend, bool)>> = Default::default();
@@ -1792,12 +1792,12 @@ impl App {
                                         ui.set_width(ui.available_width());
                                         ui.spacing_mut().item_spacing.y = 2.0;
                                         ui.label(RichText::new(big).font(egui::FontId::new(20.0, t::bold())));
-                                        ui.label(RichText::new(small).size(11.5).color(t::MUTED));
+                                        ui.label(RichText::new(small).size(11.5).color(t::MUTED()));
                                     });
                                 }
                             });
                             if !st.stats.is_empty() {
-                                ui.label(RichText::new(&st.stats).size(11.5).color(t::MUTED));
+                                ui.label(RichText::new(&st.stats).size(11.5).color(t::MUTED()));
                             }
                             if !st.clients.is_empty() {
                                 t::section(ui, &tr("Guests"));
@@ -1805,10 +1805,10 @@ impl App {
                                     ui.set_width(ui.available_width());
                                     for c in &st.clients {
                                         ui.horizontal(|ui| {
-                                            dot(ui, t::MINT);
+                                            dot(ui, t::MINT());
                                             ui.label(RichText::new(c).font(egui::FontId::new(14.0, t::bold())));
                                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                if ui.button(RichText::new(tr("Kick")).color(t::DANGER)).clicked() {
+                                                if ui.button(RichText::new(tr("Kick")).color(t::DANGER())).clicked() {
                                                     h.kick(c);
                                                 }
                                             });
@@ -1821,7 +1821,7 @@ impl App {
                                         h.set_mic(mic);
                                     }
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        if ui.button(RichText::new(tr("Panic: kick everyone")).color(t::DANGER)).on_hover_text(tr("Ctrl+Alt+Shift+F12 anywhere")).clicked() {
+                                        if ui.button(RichText::new(tr("Panic: kick everyone")).color(t::DANGER())).on_hover_text(tr("Ctrl+Alt+Shift+F12 anywhere")).clicked() {
                                             panic_clicked = true;
                                         }
                                         if ui.button(tr("Send file…")).clicked() {
@@ -1831,17 +1831,17 @@ impl App {
                                 });
                                 let (talking, mic_err) = h.voice_status();
                                 if !talking.is_empty() {
-                                    ui.label(RichText::new(trf("Talking: {}", &[&talking.join(", ")])).color(t::MINT_SOFT));
+                                    ui.label(RichText::new(trf("Talking: {}", &[&talking.join(", ")])).color(t::MINT_SOFT()));
                                 }
                                 if let Some(e) = mic_err {
-                                    ui.colored_label(t::DANGER, crate::rtl::show(&e));
+                                    ui.colored_label(t::DANGER(), crate::rtl::show(&e));
                                 }
                                 t::section(ui, &tr("Chat"));
                                 t::card().show(ui, |ui| {
                                     ui.set_width(ui.available_width());
                                     egui::ScrollArea::vertical().id_salt("hostchat").max_height(140.0).stick_to_bottom(true).show(ui, |ui| {
                                         if st.chat.is_empty() {
-                                            ui.label(RichText::new(tr("No messages yet")).color(t::MUTED));
+                                            ui.label(RichText::new(tr("No messages yet")).color(t::MUTED()));
                                         }
                                         for (from, text) in st.chat.iter().rev().take(30).rev() {
                                             ui.label(crate::rtl::show(&format!("{from}: {text}")));
@@ -1869,7 +1869,7 @@ impl App {
                                                 let slot = p.player.map(|n| trf("Player {}", &[&n.to_string()])).unwrap_or_else(|| format!("#{}", i + 1));
                                                 let kind = if p.playstation { "PlayStation" } else { "Xbox" };
                                                 ui.label(RichText::new(slot).font(egui::FontId::new(14.0, t::bold())));
-                                                ui.label(RichText::new(format!("{} · pad {} · {kind}", p.guest, p.pad + 1)).color(t::SOFT));
+                                                ui.label(RichText::new(format!("{} · pad {} · {kind}", p.guest, p.pad + 1)).color(t::SOFT()));
                                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                                     if i + 1 < n && ui.small_button(tr("Down")).clicked() {
                                                         move_pad = Some((i, false));
@@ -1884,28 +1884,28 @@ impl App {
                                 }
                             }
                             if let Some(e) = &st.error {
-                                ui.colored_label(t::DANGER, crate::rtl::show(e));
+                                ui.colored_label(t::DANGER(), crate::rtl::show(e));
                             }
                             for n in &st.notes {
-                                ui.label(RichText::new(n).size(11.5).color(t::MUTED));
+                                ui.label(RichText::new(n).size(11.5).color(t::MUTED()));
                             }
                         } else {
-                            egui::Frame::NONE.stroke(egui::Stroke::new(1.0, t::LINE2)).corner_radius(14.0).inner_margin(egui::Margin::same(28)).show(ui, |ui| {
+                            egui::Frame::NONE.stroke(egui::Stroke::new(1.0, t::LINE2())).corner_radius(14.0).inner_margin(egui::Margin::same(28)).show(ui, |ui| {
                                 ui.set_width(ui.available_width());
                                 ui.vertical_centered(|ui| {
-                                    para(ui, &tl("Hosting is off. Friends can't connect to this PC until you turn it on."), 14.0, t::SOFT);
+                                    para(ui, &tl("Hosting is off. Friends can't connect to this PC until you turn it on."), 14.0, t::SOFT());
                                 });
                             });
                         }
                         if let Some(e) = &self.host_err {
-                            ui.colored_label(t::DANGER, crate::rtl::show(e));
+                            ui.colored_label(t::DANGER(), crate::rtl::show(e));
                         }
                         if self.host.is_some() {
                             t::section(ui, &tr("Invite someone (no friend request needed)"));
                             t::card().show(ui, |ui| {
                                 ui.set_width(ui.available_width());
                                 ui.horizontal_wrapped(|ui| {
-                                    ui.label(RichText::new(tr("They may use:")).color(t::SOFT));
+                                    ui.label(RichText::new(tr("They may use:")).color(t::SOFT()));
                                     t::switch(ui, &mut self.invite_perms.mouse, &tr("Mouse"));
                                     t::switch(ui, &mut self.invite_perms.keyboard, &tr("Keyboard"));
                                     t::switch(ui, &mut self.invite_perms.gamepad, &tr("Controller"));
@@ -1918,7 +1918,7 @@ impl App {
                                         self.toast(tl("Invite link copied. Send it to them: works once, for 1 hour."));
                                         self.last_invite = Some(link);
                                     }
-                                    ui.label(RichText::new(tr("One use, valid for 1 hour")).size(11.5).color(t::MUTED));
+                                    ui.label(RichText::new(tr("One use, valid for 1 hour")).size(11.5).color(t::MUTED()));
                                 });
                                 ui.horizontal(|ui| {
                                     let host = self.host.as_ref().map(|h| h.handle());
@@ -1929,7 +1929,7 @@ impl App {
                                             self.toast(tl("Browser link copied. Anyone who opens it can join once, within 1 hour."));
                                         }
                                     }
-                                    ui.label(RichText::new(tr("No install needed")).size(11.5).color(t::MUTED));
+                                    ui.label(RichText::new(tr("No install needed")).size(11.5).color(t::MUTED()));
                                 });
                                 ui.horizontal(|ui| {
                                     let host = self.host.as_ref().map(|h| h.handle());
@@ -1940,15 +1940,15 @@ impl App {
                                             self.toast(tl("Watch party link copied: up to 8 people can watch for 3 hours."));
                                         }
                                     }
-                                    ui.label(RichText::new(tr("View only, many people")).size(11.5).color(t::MUTED));
+                                    ui.label(RichText::new(tr("View only, many people")).size(11.5).color(t::MUTED()));
                                 });
                                 for inv in sig.invites() {
                                     let mins = inv.expires.saturating_duration_since(Instant::now()).as_secs() / 60 + 1;
                                     let what: Vec<String> = [(inv.mouse, "mouse"), (inv.keyboard, "keyboard"), (inv.gamepad, "controller")].iter().filter(|x| x.0).map(|x| tl(x.1)).collect();
                                     let what = if what.is_empty() { tl("view only (spectator)") } else { what.join(", ") };
                                     ui.horizontal(|ui| {
-                                        ui.label(RichText::new(&inv.code).monospace().color(t::ACCENT_SOFT));
-                                        ui.label(RichText::new(trf("{} · {} min left", &[&what, &mins.to_string()])).size(12.0).color(t::SOFT));
+                                        ui.label(RichText::new(&inv.code).monospace().color(t::ACCENT_SOFT()));
+                                        ui.label(RichText::new(trf("{} · {} min left", &[&what, &mins.to_string()])).size(12.0).color(t::SOFT()));
                                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                             if ui.small_button(tr("Revoke")).clicked() {
                                                 sig.revoke_invite(&inv.code);
@@ -1976,20 +1976,20 @@ impl App {
                             ui.set_width(ui.available_width());
                             let live: Vec<(String, String, u64)> = self.live_sessions.iter().map(|(g, (start, at))| (g.clone(), start.clone(), at.elapsed().as_secs())).collect();
                             if live.is_empty() && self.history.is_empty() {
-                                ui.label(RichText::new(tr("Nobody has connected yet")).color(t::MUTED));
+                                ui.label(RichText::new(tr("Nobody has connected yet")).color(t::MUTED()));
                             }
                             for (g, start, secs) in &live {
                                 ui.horizontal(|ui| {
-                                    dot(ui, t::MINT);
+                                    dot(ui, t::MINT());
                                     ui.label(RichText::new(g).font(egui::FontId::new(13.5, t::bold())));
-                                    ui.label(RichText::new(trf("{} · connected now ({})", &[start, &duration_text(*secs)])).size(12.0).color(t::MINT_SOFT));
+                                    ui.label(RichText::new(trf("{} · connected now ({})", &[start, &duration_text(*secs)])).size(12.0).color(t::MINT_SOFT()));
                                 });
                             }
                             for h in self.history.iter().rev().take(15) {
                                 ui.horizontal(|ui| {
-                                    dot(ui, t::LINE2);
+                                    dot(ui, t::LINE2());
                                     ui.label(RichText::new(&h.guest).font(egui::FontId::new(13.5, t::bold())));
-                                    ui.label(RichText::new(format!("{} · {}", h.start, duration_text(h.secs))).size(12.0).color(t::MUTED));
+                                    ui.label(RichText::new(format!("{} · {}", h.start, duration_text(h.secs))).size(12.0).color(t::MUTED()));
                                 });
                             }
                         });
@@ -2005,19 +2005,19 @@ impl App {
                                 }
                             });
                         });
-                        egui::Frame::NONE.fill(Color32::from_rgb(0x11, 0x0F, 0x2C)).stroke(egui::Stroke::new(1.5, t::ACCENT_LINE)).corner_radius(16.0).inner_margin(egui::Margin::same(22)).show(ui, |ui| {
+                        egui::Frame::NONE.fill(Color32::from_rgb(0x11, 0x0F, 0x2C)).stroke(egui::Stroke::new(1.5, t::ACCENT_LINE())).corner_radius(16.0).inner_margin(egui::Margin::same(22)).show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             ui.vertical_centered(|ui| {
                                 let (r, _) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
-                                t::icon(ui.painter(), r, Icon::Upload, t::ACCENT_SOFT);
+                                t::icon(ui.painter(), r, Icon::Upload, t::ACCENT_SOFT());
                                 ui.label(RichText::new(tr("Drop files on this window to send them")).font(egui::FontId::new(15.0, t::bold())));
                                 if guests > 0 {
                                     if t::primary(ui, &tr("Choose a file…"), None, true).clicked() {
                                         pick = true;
                                     }
-                                    ui.label(RichText::new(trf("Goes to your {} guest(s)", &[&guests.to_string()])).size(12.0).color(t::MUTED));
+                                    ui.label(RichText::new(trf("Goes to your {} guest(s)", &[&guests.to_string()])).size(12.0).color(t::MUTED()));
                                 } else {
-                                    para(ui, &tl("Sends to whoever you're connected with: guests on this PC, or the PC you're controlling (use Send file in its menu)."), 12.0, t::MUTED);
+                                    para(ui, &tl("Sends to whoever you're connected with: guests on this PC, or the PC you're controlling (use Send file in its menu)."), 12.0, t::MUTED());
                                 }
                             });
                         });
@@ -2026,7 +2026,7 @@ impl App {
                         t::card().show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             if xfers.is_empty() {
-                                ui.label(RichText::new(tr("Nothing in progress")).color(t::MUTED));
+                                ui.label(RichText::new(tr("Nothing in progress")).color(t::MUTED()));
                             }
                             for (guest, p) in &xfers {
                                 ui.horizontal(|ui| {
@@ -2068,15 +2068,15 @@ impl App {
                                     }
                                 });
                                 if let Some(e) = &self.rename_err {
-                                    ui.colored_label(t::DANGER, crate::rtl::show(e));
+                                    ui.colored_label(t::DANGER(), crate::rtl::show(e));
                                 }
-                                para(ui, &tl("Letters and numbers only, once every 3 months. Your #tag changes too; friends keep you."), 11.5, t::MUTED);
+                                para(ui, &tl("Letters and numbers only, once every 3 months. Your #tag changes too; friends keep you."), 11.5, t::MUTED());
                             });
                             t::card().show(r, |ui| {
                                 ui.set_width(ui.available_width());
                                 t::section(ui, &tr("General"));
                                 ui.horizontal(|ui| {
-                                    ui.label(RichText::new(tr("Language")).color(t::SOFT));
+                                    ui.label(RichText::new(tr("Language")).color(t::SOFT()));
                                     let ar = crate::i18n::arabic();
                                     if ui.selectable_label(!ar, "English").clicked() && ar {
                                         crate::i18n::set_arabic(false);
@@ -2092,6 +2092,11 @@ impl App {
                                 if t::switch(ui, &mut self.autostart, &tr("Start with Windows (in tray)")) {
                                     settings::set_autostart(self.autostart);
                                 }
+                                if t::switch(ui, &mut self.s.light_theme, &tr("Light theme")) {
+                                    crate::theme::set_light(self.s.light_theme);
+                                    crate::theme::apply(ui.ctx());
+                                    self.s.save();
+                                }
                                 if t::switch(ui, &mut self.s.notify_online, &tr("Notify when friends come online")) {
                                     self.s.save();
                                 }
@@ -2103,7 +2108,7 @@ impl App {
                                     self.s.save();
                                 }
                                 ui.horizontal(|ui| {
-                                    ui.label(RichText::new(tr("Session shortcut keys")).color(t::SOFT));
+                                    ui.label(RichText::new(tr("Session shortcut keys")).color(t::SOFT()));
                                     let cur = HOTKEY_MODS.iter().find(|m| m.0 == self.s.hotkey_mods).map(|m| m.1).unwrap_or("Ctrl+Alt+Shift");
                                     egui::ComboBox::from_id_salt("hkmods").selected_text(cur).show_ui(ui, |ui| {
                                         for (bits, name) in HOTKEY_MODS {
@@ -2112,7 +2117,7 @@ impl App {
                                             }
                                         }
                                     });
-                                    ui.label(RichText::new(tr("+ Q, O, R, F, C, P, V, M")).size(11.5).color(t::MUTED));
+                                    ui.label(RichText::new(tr("+ Q, O, R, F, C, P, V, M")).size(11.5).color(t::MUTED()));
                                 });
                             });
                             t::card().show(l, |ui| {
@@ -2121,7 +2126,7 @@ impl App {
                                 restart_host |= t::switch(ui, &mut self.s.hardware, &tr("Hardware encoding (GPU)"));
                                 restart_host |= t::switch(ui, &mut self.s.record_sessions, &tr("Record sessions on this PC (Videos\\Kinlink)"));
                                 ui.horizontal(|ui| {
-                                    ui.label(RichText::new(tr("Max fps")).color(t::SOFT));
+                                    ui.label(RichText::new(tr("Max fps")).color(t::SOFT()));
                                     egui::ComboBox::from_id_salt("fps").selected_text(format!("{}", self.s.fps)).show_ui(ui, |ui| {
                                         for f in [30, 60, 120, 144] {
                                             restart_host |= ui.selectable_value(&mut self.s.fps, f, format!("{f}")).changed();
@@ -2129,20 +2134,20 @@ impl App {
                                     });
                                 });
                                 ui.horizontal(|ui| {
-                                    ui.label(RichText::new(tr("Max bitrate")).color(t::SOFT));
+                                    ui.label(RichText::new(tr("Max bitrate")).color(t::SOFT()));
                                     restart_host |= ui.add(egui::Slider::new(&mut self.s.max_mbps, 3..=100).suffix(" Mbps")).drag_stopped();
                                 });
                             });
                             t::card().show(l, |ui| {
                                 ui.set_width(ui.available_width());
                                 t::section(ui, &tr("Controller buttons"));
-                                ui.label(RichText::new(tr("Make a button on your controller act as another one (for games you play through Kinlink).")).size(12.0).color(t::MUTED));
+                                ui.label(RichText::new(tr("Make a button on your controller act as another one (for games you play through Kinlink).")).size(12.0).color(t::MUTED()));
                                 let mut map = if self.s.pad_map.len() == 16 { self.s.pad_map.clone() } else { crate::client::IDENTITY_MAP.to_vec() };
                                 let mut changed = false;
                                 egui::CollapsingHeader::new(tr("Remap buttons")).show(ui, |ui| {
                                     egui::Grid::new("padmap").num_columns(4).spacing([10.0, 6.0]).show(ui, |ui| {
                                         for (n, (i, name)) in PAD_BUTTONS.iter().enumerate() {
-                                            ui.label(RichText::new(*name).color(t::SOFT));
+                                            ui.label(RichText::new(*name).color(t::SOFT()));
                                             let cur = PAD_BUTTONS.iter().find(|(b, _)| *b == map[*i as usize]).map(|b| b.1).unwrap_or("?");
                                             egui::ComboBox::from_id_salt(("pm", *i)).width(70.0).selected_text(cur).show_ui(ui, |ui| {
                                                 for (b, bname) in PAD_BUTTONS {
@@ -2189,21 +2194,21 @@ impl App {
                                 t::section(ui, &tr("Lock screen & admin prompts"));
                                 let (installed, running) = crate::syshelper::service_state();
                                 if installed && crate::syshelper::helper_is_stale() {
-                                    para(ui, &tl("The helper belongs to another copy of Kinlink (an old version or a moved file), so it won't work with this one."), 12.0, t::DANGER);
+                                    para(ui, &tl("The helper belongs to another copy of Kinlink (an old version or a moved file), so it won't work with this one."), 12.0, t::DANGER());
                                     ui.horizontal(|ui| {
                                         if t::primary(ui, &tr("Update helper (asks for admin)"), None, true).clicked() {
                                             crate::syshelper::run_elevated("--install-service");
                                         }
                                     });
                                 } else if installed {
-                                    ui.colored_label(if running { t::MINT_SOFT } else { t::DANGER }, if running { tr("Guests can control them") } else { tr("Helper installed but not running") });
+                                    ui.colored_label(if running { t::MINT_SOFT() } else { t::DANGER() }, if running { tr("Guests can control them") } else { tr("Helper installed but not running") });
                                     ui.horizontal(|ui| {
                                         if ui.button(tr("Turn off")).on_hover_text(tr("Removes the helper service (asks for admin)")).clicked() {
                                             crate::syshelper::run_elevated("--uninstall-service");
                                         }
                                     });
                                 } else {
-                                    para(ui, &tl("Lets guests see and use the Windows lock screen, UAC prompts and admin apps."), 12.0, t::SOFT);
+                                    para(ui, &tl("Lets guests see and use the Windows lock screen, UAC prompts and admin apps."), 12.0, t::SOFT());
                                     ui.horizontal(|ui| {
                                         if ui.button(tr("Enable (asks for admin)")).clicked() {
                                             crate::syshelper::run_elevated("--install-service");
@@ -2229,8 +2234,8 @@ impl App {
                                         open_url("https://github.com/IamAbood/Kinlink/blob/main/PRIVACY.md");
                                     }
                                 });
-                                para(ui, &tl("Only connect to PCs you own or have permission to use."), 11.5, t::SOFT);
-                                ui.label(RichText::new(trf("Kinlink {} · made by Abdulkareem Alsaou", &[&crate::updater::current()])).size(11.5).color(t::MUTED));
+                                para(ui, &tl("Only connect to PCs you own or have permission to use."), 11.5, t::SOFT());
+                                ui.label(RichText::new(trf("Kinlink {} · made by Abdulkareem Alsaou", &[&crate::updater::current()])).size(11.5).color(t::MUTED()));
                             });
                         });
                     }
@@ -2283,14 +2288,14 @@ impl App {
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 1.0;
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(crate::rtl::show(&f.display())).font(egui::FontId::new(15.0, t::bold())).color(if online { t::TEXT } else { t::SOFT }));
+                        ui.label(RichText::new(crate::rtl::show(&f.display())).font(egui::FontId::new(15.0, t::bold())).color(if online { t::TEXT() } else { t::SOFT() }));
                         if !f.nickname.trim().is_empty() {
-                            ui.label(RichText::new(f.id()).size(12.5).color(t::MUTED));
+                            ui.label(RichText::new(f.id()).size(12.5).color(t::MUTED()));
                         }
                     });
                     let status = sig.status_of(&f.public);
                     let line = if !online { tr("Offline") } else if status.is_empty() { tr("Online") } else { trf("Online · {}", &[&crate::i18n::tl(&status)]) };
-                    ui.label(RichText::new(line).size(12.0).color(if online { t::MINT_SOFT } else { t::MUTED }));
+                    ui.label(RichText::new(line).size(12.0).color(if online { t::MINT_SOFT() } else { t::MUTED() }));
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let open = self.expanded == Some(f.public);
@@ -2301,7 +2306,7 @@ impl App {
                     let r = t::icon_button(ui, Icon::Chat, &tr("Message"), self.chat_with == Some(f.public));
                     if unread > 0 {
                         let c = egui::pos2(r.rect.max.x - 3.0, r.rect.min.y + 3.0);
-                        ui.painter().circle_filled(c, 8.0, t::ACCENT);
+                        ui.painter().circle_filled(c, 8.0, t::ACCENT());
                         ui.painter().text(c, egui::Align2::CENTER_CENTER, unread.min(99).to_string(), egui::FontId::new(10.0, t::bold()), Color32::WHITE);
                     }
                     if r.clicked() {
@@ -2318,7 +2323,7 @@ impl App {
             if self.expanded == Some(f.public) {
                 let mut g = f.clone();
                 let mut ask = false;
-                egui::Frame::NONE.fill(t::BG).stroke(egui::Stroke::new(1.0, t::LINE)).corner_radius(12.0).inner_margin(egui::Margin::same(14)).show(ui, |ui| {
+                egui::Frame::NONE.fill(t::BG()).stroke(egui::Stroke::new(1.0, t::LINE())).corner_radius(12.0).inner_margin(egui::Margin::same(14)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         if ui.add_enabled(online, egui::Button::new(tr("Ask them for help"))).on_hover_text(tr("They get a notification; when they connect within 15 minutes they get full control without asking.")).clicked() {
@@ -2327,27 +2332,27 @@ impl App {
                     });
                     ui.columns(2, |c| {
                         let ui = &mut c[0];
-                        ui.label(RichText::new(tr("Nickname")).size(12.0).color(t::SOFT));
+                        ui.label(RichText::new(tr("Nickname")).size(12.0).color(t::SOFT()));
                         ui.add(egui::TextEdit::singleline(&mut g.nickname).hint_text(tr("e.g. Ahmad's gaming PC")).margin(egui::vec2(10.0, 7.0)));
-                        ui.label(RichText::new(tr("Group")).size(12.0).color(t::SOFT));
+                        ui.label(RichText::new(tr("Group")).size(12.0).color(t::SOFT()));
                         ui.add(egui::TextEdit::singleline(&mut g.group).hint_text(tr("e.g. Home")).margin(egui::vec2(10.0, 7.0)));
                         ui.horizontal(|ui| {
                             if ui.button(tr("Desktop shortcut")).on_hover_text(tr("One click on the desktop connects to this friend")).clicked() {
                                 shortcut_for = Some(f.clone());
                             }
-                            if ui.button(RichText::new(tr("Remove")).color(t::DANGER)).clicked() {
+                            if ui.button(RichText::new(tr("Remove")).color(t::DANGER())).clicked() {
                                 sig.remove(f.public);
                                 self.expanded = None;
                             }
                         });
                         let ui = &mut c[1];
-                        ui.label(RichText::new(tr("When they connect to this PC")).size(12.0).color(t::SOFT));
+                        ui.label(RichText::new(tr("When they connect to this PC")).size(12.0).color(t::SOFT()));
                         t::switch(ui, &mut g.allow_mouse, &tr("Mouse"));
                         t::switch(ui, &mut g.allow_keyboard, &tr("Keyboard"));
                         t::switch(ui, &mut g.allow_gamepad, &tr("Controller"));
                         t::switch(ui, &mut g.auto_connect, &tr("Connect without asking"));
-                        ui.label(RichText::new(tr("All three off = spectator (view only)")).size(11.0).color(t::MUTED));
-                        ui.label(RichText::new(trf("Safety code: {}", &[&sig.safety_code(&f.public)])).size(11.5).color(t::SOFT))
+                        ui.label(RichText::new(tr("All three off = spectator (view only)")).size(11.0).color(t::MUTED()));
+                        ui.label(RichText::new(trf("Safety code: {}", &[&sig.safety_code(&f.public)])).size(11.5).color(t::SOFT()))
                             .on_hover_text(tr("Same code on both screens = you're really talking to each other"));
                     });
                 });
@@ -2371,7 +2376,7 @@ impl App {
             ui.add_space(4.0);
             if k + 1 < n {
                 let r = ui.available_rect_before_wrap();
-                ui.painter().hline(r.x_range(), r.top(), egui::Stroke::new(1.0, t::LINE));
+                ui.painter().hline(r.x_range(), r.top(), egui::Stroke::new(1.0, t::LINE()));
                 ui.add_space(1.0);
             }
         }
@@ -2408,7 +2413,7 @@ impl App {
             }
             if let Some(m) = r.suggest_mbps {
                 ui.separator();
-                para(ui, &tlf("Suggested max bitrate when friends connect to you: {} Mbps (current {} Mbps)", &[&m.to_string(), &self.s.max_mbps.to_string()]), 14.0, crate::theme::TEXT);
+                para(ui, &tlf("Suggested max bitrate when friends connect to you: {} Mbps (current {} Mbps)", &[&m.to_string(), &self.s.max_mbps.to_string()]), 14.0, crate::theme::TEXT());
                 ui.small(tr("If several friends join at once, they share your upload: lower it further."));
                 if ui.button(trf("Use {} Mbps", &[&m.to_string()])).clicked() {
                     apply = Some(m);
@@ -2509,6 +2514,7 @@ Updating the graphics driver usually fixes this.");
             }
         };
         self.egui_state = Some(egui_winit::State::new(self.egui_ctx.clone(), egui::ViewportId::ROOT, &window, Some(window.scale_factor() as f32), None, None));
+        crate::theme::set_light(self.s.light_theme);
         crate::theme::apply(&self.egui_ctx);
         crate::i18n::set_arabic(match self.s.language.as_str() {
             "ar" => true,
@@ -2914,17 +2920,17 @@ impl App {
                 .title_bar(false)
                 .collapsible(false)
                 .resizable(false)
-                .frame(egui::Frame::NONE.fill(Color32::from_rgb(0x16, 0x1F, 0x3A)).stroke(egui::Stroke::new(1.0, t::ACCENT_LINE)).corner_radius(16.0).inner_margin(egui::Margin::same(16)))
+                .frame(egui::Frame::NONE.fill(Color32::from_rgb(0x16, 0x1F, 0x3A)).stroke(egui::Stroke::new(1.0, t::ACCENT_LINE())).corner_radius(16.0).inner_margin(egui::Margin::same(16)))
                 .anchor(egui::Align2::RIGHT_BOTTOM, [-24.0, -24.0 - base - i as f32 * 150.0])
                 .show(ctx, |ui| {
                     ui.set_width(300.0);
                     ui.horizontal(|ui| {
                         let (r, _) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
-                        t::icon(ui.painter(), r, t::Icon::Files, t::ACCENT_SOFT);
+                        t::icon(ui.painter(), r, t::Icon::Files, t::ACCENT_SOFT());
                         ui.label(RichText::new(trf("{} wants to send you a file", &[&who])).font(egui::FontId::new(14.0, t::bold())));
                     });
-                    ui.label(RichText::new(format!("{} · {}", crate::rtl::show(name), human_size(*size))).color(t::SOFT));
-                    ui.label(RichText::new(tr("Saved to Downloads\\Kinlink if you accept")).size(11.5).color(t::MUTED));
+                    ui.label(RichText::new(format!("{} · {}", crate::rtl::show(name), human_size(*size))).color(t::SOFT()));
+                    ui.label(RichText::new(tr("Saved to Downloads\\Kinlink if you accept")).size(11.5).color(t::MUTED()));
                     ui.horizontal(|ui| {
                         if t::primary(ui, &tr("Accept"), None, true).clicked() {
                             answer = Some((from.clone(), *id, true));
@@ -2971,7 +2977,7 @@ impl App {
             .id(egui::Id::new("friend_chat"))
             .title_bar(false)
             .resizable(false)
-            .frame(egui::Frame::NONE.fill(t::SIDEBAR).stroke(egui::Stroke::new(1.0, t::ACCENT_LINE)).corner_radius(16.0).inner_margin(egui::Margin::same(14)).shadow(egui::Shadow { offset: [0, 14], blur: 40, spread: 0, color: Color32::from_black_alpha(140) }))
+            .frame(egui::Frame::NONE.fill(t::SIDEBAR()).stroke(egui::Stroke::new(1.0, t::ACCENT_LINE())).corner_radius(16.0).inner_margin(egui::Margin::same(14)).shadow(egui::Shadow { offset: [0, 14], blur: 40, spread: 0, color: Color32::from_black_alpha(140) }))
             .anchor(egui::Align2::RIGHT_BOTTOM, [-20.0, -44.0])
             .show(ctx, |ui| {
                 ui.set_width(330.0);
@@ -2980,7 +2986,7 @@ impl App {
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
                         ui.label(RichText::new(crate::rtl::show(&f.display())).font(egui::FontId::new(14.5, t::bold())));
-                        ui.label(RichText::new(if online { tr("Online") } else { tr("Offline · gets it when back online") }).size(11.5).color(if online { t::MINT_SOFT } else { t::MUTED }));
+                        ui.label(RichText::new(if online { tr("Online") } else { tr("Offline · gets it when back online") }).size(11.5).color(if online { t::MINT_SOFT() } else { t::MUTED() }));
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if t::icon_button(ui, t::Icon::Close, &tr("Close"), false).clicked() {
@@ -2993,14 +2999,14 @@ impl App {
                     ui.set_width(318.0);
                     if msgs.is_empty() {
                         ui.add_space(20.0);
-                        ui.vertical_centered(|ui| ui.label(RichText::new(tr("No messages yet. Say hi!")).color(t::MUTED)));
+                        ui.vertical_centered(|ui| ui.label(RichText::new(tr("No messages yet. Say hi!")).color(t::MUTED())));
                     }
                     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
                     for m in msgs.iter().rev().take(200).rev() {
                         let layout = if m.mine { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
                         ui.with_layout(layout, |ui| {
                             egui::Frame::NONE
-                                .fill(if m.mine { t::ACCENT } else { t::HOVER })
+                                .fill(if m.mine { t::ACCENT() } else { t::HOVER() })
                                 .corner_radius(if m.mine { egui::CornerRadius { nw: 12, ne: 12, sw: 12, se: 4 } } else { egui::CornerRadius { nw: 12, ne: 12, sw: 4, se: 12 } })
                                 .inner_margin(egui::Margin::symmetric(10, 6))
                                 .show(ui, |ui| {

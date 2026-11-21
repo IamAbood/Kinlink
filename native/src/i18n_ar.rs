@@ -341,6 +341,10 @@ pub fn get(en: &str) -> Option<&'static str> {
         "Refresh" => "تحديث",
         "Terminal on that PC" => "الطرفية على ذلك الجهاز",
         "Type a command (cmd.exe) and press Enter. Each line runs on its own, 30 s max." => "اكتب أمرًا (cmd.exe) واضغط Enter. كل سطر يعمل وحده، 30 ثانية كحد أقصى.",
+        "Light theme" => "المظهر الفاتح",
+        "is online" => "متصل الآن",
+        "Friend request" => "طلب صداقة",
+        "{} wants to be your friend" => "{} يريد أن يكون صديقك",
         _ => return None,
     })
 }

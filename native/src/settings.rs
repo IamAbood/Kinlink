@@ -37,11 +37,13 @@ pub struct Settings {
     pub hotkey_mods: u8,
     /// Save every session hosted on this PC as a video (Videos\Kinlink).
     pub record_sessions: bool,
+    /// Light look instead of the dark "Midnight" one.
+    pub light_theme: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { hosting: true, port: crate::proto::DEFAULT_PORT, max_mbps: 30, fps: 60, hardware: true, upnp: true, autostart_init: false, fullscreen_connect: true, hint_seen: false, notify_online: true, language: String::new(), status: String::new(), ask_files: true, pad_map: Vec::new(), show_stats: false, hotkey_mods: 7, record_sessions: false }
+        Self { hosting: true, port: crate::proto::DEFAULT_PORT, max_mbps: 30, fps: 60, hardware: true, upnp: true, autostart_init: false, fullscreen_connect: true, hint_seen: false, notify_online: true, language: String::new(), status: String::new(), ask_files: true, pad_map: Vec::new(), show_stats: false, hotkey_mods: 7, record_sessions: false, light_theme: false }
     }
 }
 
