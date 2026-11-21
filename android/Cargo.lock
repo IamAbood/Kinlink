@@ -1939,7 +1939,7 @@ dependencies = [
 
 [[package]]
 name = "pclone-android"
-version = "0.16.2-beta"
+version = "0.17.0-beta"
 dependencies = [
  "android_logger",
  "anyhow",
