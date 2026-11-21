@@ -100,6 +100,9 @@ struct Shared {
     cursor: Mutex<Option<RemoteCursor>>,
     shape: Mutex<Option<Arc<CursorShape>>>,
     wake: Box<dyn Fn() + Send + Sync>,
+    /// Last quality / sharp-text choice, re-sent once connected (sends before that go nowhere).
+    quality: Mutex<Option<(u32, u32)>>,
+    sharp: AtomicBool,
 }
 
 impl Shared {
@@ -151,6 +154,8 @@ impl Client {
             ps_pads: Mutex::new([None; 4]),
             cursor: Mutex::new(None),
             shape: Mutex::new(None),
+            quality: Mutex::new(None),
+            sharp: AtomicBool::new(false),
             wake: Box::new(wake),
         });
         {
@@ -278,7 +283,13 @@ impl Client {
     pub fn take_unread(&self) -> u32 {
         self.sh.unread.swap(0, SeqCst)
     }
+    pub fn set_sharp(&self, on: bool) {
+        self.sh.sharp.store(on, SeqCst);
+        self.sh.send(&Msg::SetSharp(on));
+    }
+
     pub fn set_quality(&self, max_height: u32, mbps: u32) {
+        *self.sh.quality.lock().unwrap() = Some((max_height, mbps));
         self.sh.send(&Msg::SetQuality { max_height, mbps });
     }
     /// 0..=100
@@ -440,6 +451,12 @@ fn recv_loop(sh: Arc<Shared>) {
                     crate::plog!("connect: CONNECTED via {from} (mouse {mouse}, keyboard {keyboard}, controller {gamepad}, audio {audio_rate} Hz)");
                     *sh.host.lock().unwrap() = Some(from);
                     *sh.last_pong.lock().unwrap() = Instant::now();
+                    if let Some((max_height, mbps)) = *sh.quality.lock().unwrap() {
+                        sh.send(&Msg::SetQuality { max_height, mbps });
+                    }
+                    if sh.sharp.load(SeqCst) {
+                        sh.send(&Msg::SetSharp(true));
+                    }
                     if audio_rate > 0 {
                         match crate::audio::start_player(audio_rate) {
                             Ok((s, b)) => {
@@ -646,6 +663,16 @@ const GILRS_MAP: [(gilrs::Button, u16); 15] = [
     (gilrs::Button::North, 0x8000),
 ];
 
+/// Controller button remap (Settings): entry i = the button bit that physical button bit i sends.
+pub static PAD_MAP: std::sync::Mutex<[u8; 16]> = std::sync::Mutex::new(IDENTITY_MAP);
+pub const IDENTITY_MAP: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+
+/// XInput button bits after the user's remap.
+pub fn remap(buttons: u16) -> u16 {
+    let map = *PAD_MAP.lock().unwrap();
+    (0..16).filter(|i| buttons & (1 << i) != 0).fold(0, |out, i| out | 1 << (map[i] & 15))
+}
+
 /// Polls local controllers and forwards them (on change, plus a refresh every 100 ms for loss).
 /// Xbox-style pads come from XInput (ids 0-3, rumble capable); PlayStation and other pads come
 /// from Windows.Gaming.Input via gilrs (ids 4-7) and are flagged so the host can show a DS4.
@@ -661,7 +688,8 @@ fn gamepad_loop(sh: Arc<Shared>) {
                 sh.send(&Msg::Input(Input::PadRemove { id }));
             }
         }
-        Some(s) => {
+        Some(mut s) => {
+            s.buttons = remap(s.buttons);
             if last.is_none_or(|(p, t)| p != s || t.elapsed() > Duration::from_millis(100)) {
                 *last = Some((s, Instant::now()));
                 sh.send(&Msg::Input(Input::Pad { id, state: s }));
@@ -742,5 +770,19 @@ fn gamepad_loop(sh: Arc<Shared>) {
             }
         }
         thread::sleep(Duration::from_millis(4));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn remap_swaps_a_and_b() {
+        assert_eq!(super::remap(0x1001), 0x1001); // unchanged by default
+        let mut m = super::IDENTITY_MAP;
+        (m[12], m[13]) = (13, 12); // A <-> B
+        *super::PAD_MAP.lock().unwrap() = m;
+        assert_eq!(super::remap(0x1000), 0x2000);
+        assert_eq!(super::remap(0x2001), 0x1001);
+        *super::PAD_MAP.lock().unwrap() = super::IDENTITY_MAP;
     }
 }

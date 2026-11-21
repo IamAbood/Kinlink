@@ -80,6 +80,7 @@ struct Session {
     files: Transfers,
     max_height: u32,
     mbps: u32,
+    sharp: bool,
     last_lost: u32,
 }
 
@@ -158,6 +159,13 @@ impl Shared {
         let h = ss.iter().map(|s| s.max_height).filter(|h| *h > 0).min().unwrap_or(0);
         let mbps = ss.iter().map(|s| s.mbps).min().unwrap_or(self.cfg.max_mbps);
         (h, mbps * 1_000_000)
+    }
+
+    /// Frame rate to stream at: sharp-text mode (any guest) caps it at 30 so every frame gets
+    /// twice the bits, which keeps small text crisp.
+    fn fps(&self) -> u32 {
+        let sharp = self.sessions.lock().unwrap().iter().any(|s| s.sharp);
+        if sharp { self.cfg.fps.clamp(1, 30) } else { self.cfg.fps.max(1) }
     }
 }
 
@@ -542,6 +550,7 @@ fn on_packet(sh: &Arc<Shared>, idx: usize, from: SocketAddr, pkt: &[u8]) {
                 files: Transfers::default(),
                 max_height: 0,
                 mbps: sh.cfg.max_mbps,
+                sharp: false,
                 last_lost: 0,
             });
             crate::plog!("host: guest connected from {from}");
@@ -608,6 +617,12 @@ fn on_packet(sh: &Arc<Shared>, idx: usize, from: SocketAddr, pkt: &[u8]) {
             sh.bitrate.store(cap, SeqCst);
             sh.keyframe.store(true, SeqCst);
         }
+        Msg::SetSharp(on) => {
+            if let Some(s) = sh.sessions.lock().unwrap().iter_mut().find(|s| s.id == sid) {
+                s.sharp = on;
+            }
+            sh.keyframe.store(true, SeqCst);
+        }
         Msg::Clipboard { seq, text } => {
             let ack = sh.sessions.lock().unwrap().iter_mut().find(|s| s.id == sid).map(|s| s.clip.on_remote(seq, text));
             if let Some(ack) = ack {
@@ -669,7 +684,7 @@ fn video_loop(sh: Arc<Shared>) {
     let (mut frame, mut scaled) = (Vec::new(), Vec::new());
     let mut frame_id = 0u32;
     let mut dirty = false;
-    let frame_time = Duration::from_secs_f64(1.0 / sh.cfg.fps.max(1) as f64);
+    let mut enc_fps = 0;
     let mut next_slot = Instant::now();
     let mut sent_shape = u32::MAX;
     let (mut n_frames, mut n_bytes, mut enc_time, mut tick) = (0u32, 0usize, Duration::ZERO, Instant::now());
@@ -782,7 +797,8 @@ fn video_loop(sh: Arc<Shared>) {
         }
         sh.keyframe.store(false, SeqCst);
         dirty = false;
-        next_slot = Instant::now() + frame_time;
+        let fps = sh.fps();
+        next_slot = Instant::now() + Duration::from_secs_f64(1.0 / fps as f64);
 
         // Resolution option (lowest any guest asked for) + even dimensions for the encoder.
         let (max_h, _) = sh.quality();
@@ -796,13 +812,16 @@ fn video_loop(sh: Arc<Shared>) {
             scale::bilinear(&frame, fw, fh, &mut scaled, w, h);
             &scaled
         };
-        if enc.is_none() || enc_size != (w, h) {
+        if enc.is_none() || enc_size != (w, h) || enc_fps != fps {
             cur_bitrate = sh.bitrate.load(SeqCst);
-            match new_encoder(w, h, sh.cfg.fps, cur_bitrate, sh.cfg.hardware) {
+            match new_encoder(w, h, fps, cur_bitrate, sh.cfg.hardware) {
                 Ok(e) => {
-                    sh.status.lock().unwrap().encoder = format!("{} @ {}x{}", e.name(), w, h);
+                    let what = format!("{} @ {}x{} {} fps", e.name(), w, h, fps);
+                    crate::plog!("host: encoder {what}");
+                    sh.status.lock().unwrap().encoder = what;
                     enc = Some(e);
                     enc_size = (w, h);
+                    enc_fps = fps;
                 }
                 Err(e) => {
                     sh.status.lock().unwrap().error = Some(format!("Encoder: {e:#}"));

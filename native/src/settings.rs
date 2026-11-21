@@ -28,11 +28,14 @@ pub struct Settings {
     pub status: String,
     /// Ask before accepting incoming files.
     pub ask_files: bool,
+    /// Controller remap: entry i = which button (bit index) physical button i acts as.
+    /// Empty = unchanged.
+    pub pad_map: Vec<u8>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { hosting: true, port: crate::proto::DEFAULT_PORT, max_mbps: 30, fps: 60, hardware: true, upnp: true, autostart_init: false, fullscreen_connect: true, hint_seen: false, notify_online: true, language: String::new(), status: String::new(), ask_files: true }
+        Self { hosting: true, port: crate::proto::DEFAULT_PORT, max_mbps: 30, fps: 60, hardware: true, upnp: true, autostart_init: false, fullscreen_connect: true, hint_seen: false, notify_online: true, language: String::new(), status: String::new(), ask_files: true, pad_map: Vec::new() }
     }
 }
 

@@ -38,6 +38,26 @@ const GREEN: Color32 = crate::theme::MINT;
 const RED: Color32 = Color32::from_rgb(0xFF, 0x7A, 0x96);
 const RESOLUTIONS: &[(&str, u32)] = &[("Native", 0), ("1440p", 1440), ("1080p", 1080), ("900p", 900), ("720p", 720), ("540p", 540)];
 const QUALITIES: &[(&str, u32)] = &[("Low (5 Mbps)", 5), ("Medium (10 Mbps)", 10), ("High (20 Mbps)", 20), ("Very high (35 Mbps)", 35), ("Max (60 Mbps)", 60)];
+/// One-tap presets: (name, RESOLUTIONS index, QUALITIES index, sharp text).
+const PRESETS: &[(&str, usize, usize, bool)] = &[("Low data", 4, 0, false), ("Balanced", 2, 2, false), ("Best", 0, 3, false), ("Sharp text", 0, 3, true)];
+
+/// Controller buttons as (XInput bit index, label), in remap-editor order.
+const PAD_BUTTONS: &[(u8, &str)] = &[(12, "A"), (13, "B"), (14, "X"), (15, "Y"), (8, "LB"), (9, "RB"), (6, "L3"), (7, "R3"), (4, "Start"), (5, "Back"), (0, "Up"), (1, "Down"), (2, "Left"), (3, "Right"), (10, "Guide")];
+
+/// Applies a saved controller remap (empty/invalid = unchanged).
+fn set_pad_map(m: &[u8]) {
+    *crate::client::PAD_MAP.lock().unwrap() = m.try_into().unwrap_or(crate::client::IDENTITY_MAP);
+}
+
+/// What each preset is for (tooltip).
+fn preset_hint(name: &str) -> &'static str {
+    match name {
+        "Low data" => "720p, 5 Mbps: slow or mobile internet",
+        "Balanced" => "1080p, 20 Mbps",
+        "Best" => "Full resolution, 35 Mbps",
+        _ => "Full resolution at 30 fps: crisp text for reading and office work",
+    }
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Page {
@@ -148,6 +168,8 @@ pub struct App {
     mods: [bool; 3],
     res_idx: usize,
     qual_idx: usize,
+    /// Sharp-text mode: 30 fps with more detail per frame (for reading/office work).
+    sharp: bool,
     volume: u32,
     muted: bool,
     autostart: bool,
@@ -226,6 +248,7 @@ impl App {
             mods: [false; 3],
             res_idx: 0,
             qual_idx: 3,
+            sharp: false,
             volume: 100,
             muted: false,
             autostart: settings::autostart_enabled(),
@@ -283,6 +306,7 @@ impl App {
         sig.set_status(&self.s.status);
         self.signal = Some(sig);
         crate::files::ASK.store(self.s.ask_files, std::sync::atomic::Ordering::Relaxed);
+        set_pad_map(&self.s.pad_map);
         self.signal_started = Instant::now();
         if !self.s.autostart_init && settings::profile().is_none() {
             // New install: start with Windows by default (can be turned off in settings).
@@ -634,6 +658,7 @@ impl App {
     fn apply_quality(&self) {
         if let Some(c) = &self.client {
             c.set_quality(RESOLUTIONS[self.res_idx].1, QUALITIES[self.qual_idx].1);
+            c.set_sharp(self.sharp);
         }
     }
 
@@ -1200,6 +1225,17 @@ impl App {
                 });
                 // stream settings
                 egui::Grid::new("ov").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                    ui.label(RichText::new(tr("Preset")).color(t::SOFT));
+                    ui.horizontal(|ui| {
+                        for (name, r, q, sharp) in PRESETS {
+                            let on = (self.res_idx, self.qual_idx, self.sharp) == (*r, *q, *sharp);
+                            if ui.selectable_label(on, tr(name)).on_hover_text(tr(preset_hint(name))).clicked() && !on {
+                                (self.res_idx, self.qual_idx, self.sharp) = (*r, *q, *sharp);
+                                quality_changed = true;
+                            }
+                        }
+                    });
+                    ui.end_row();
                     ui.label(RichText::new(tr("Resolution")).color(t::SOFT));
                     egui::ComboBox::from_id_salt("res").width(150.0).selected_text(tr(RESOLUTIONS[self.res_idx].0)).show_ui(ui, |ui| {
                         for (i, (name, _)) in RESOLUTIONS.iter().enumerate() {
@@ -1885,6 +1921,38 @@ impl App {
                                     ui.label(RichText::new(tr("Max bitrate")).color(t::SOFT));
                                     restart_host |= ui.add(egui::Slider::new(&mut self.s.max_mbps, 3..=100).suffix(" Mbps")).drag_stopped();
                                 });
+                            });
+                            t::card().show(l, |ui| {
+                                ui.set_width(ui.available_width());
+                                t::section(ui, &tr("Controller buttons"));
+                                ui.label(RichText::new(tr("Make a button on your controller act as another one (for games you play through Kinlink).")).size(12.0).color(t::MUTED));
+                                let mut map = if self.s.pad_map.len() == 16 { self.s.pad_map.clone() } else { crate::client::IDENTITY_MAP.to_vec() };
+                                let mut changed = false;
+                                egui::CollapsingHeader::new(tr("Remap buttons")).show(ui, |ui| {
+                                    egui::Grid::new("padmap").num_columns(4).spacing([10.0, 6.0]).show(ui, |ui| {
+                                        for (n, (i, name)) in PAD_BUTTONS.iter().enumerate() {
+                                            ui.label(RichText::new(*name).color(t::SOFT));
+                                            let cur = PAD_BUTTONS.iter().find(|(b, _)| *b == map[*i as usize]).map(|b| b.1).unwrap_or("?");
+                                            egui::ComboBox::from_id_salt(("pm", *i)).width(70.0).selected_text(cur).show_ui(ui, |ui| {
+                                                for (b, bname) in PAD_BUTTONS {
+                                                    changed |= ui.selectable_value(&mut map[*i as usize], *b, *bname).changed();
+                                                }
+                                            });
+                                            if n % 2 == 1 {
+                                                ui.end_row();
+                                            }
+                                        }
+                                    });
+                                    if ui.button(tr("Reset")).clicked() {
+                                        map = crate::client::IDENTITY_MAP.to_vec();
+                                        changed = true;
+                                    }
+                                });
+                                if changed {
+                                    self.s.pad_map = if map == crate::client::IDENTITY_MAP { Vec::new() } else { map };
+                                    set_pad_map(&self.s.pad_map);
+                                    self.s.save();
+                                }
                             });
                             t::card().show(r, |ui| {
                                 ui.set_width(ui.available_width());

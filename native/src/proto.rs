@@ -46,6 +46,9 @@ pub enum Msg {
     Chat { from: String, text: String },
     Clipboard { seq: u32, text: String },
     ClipboardAck { seq: u32 },
+    // client -> host (added later: older hosts just ignore it)
+    /// Sharp text: more detail per frame instead of smoothness (frame rate capped at 30).
+    SetSharp(bool),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]

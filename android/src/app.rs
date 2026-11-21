@@ -25,6 +25,9 @@ const HOLD: Duration = Duration::from_millis(450);
 /// How far (in dp, scaled to the screen) a finger may wobble and still count as a tap.
 const SLOP_DP: f32 = 14.0;
 
+/// Picture quality presets: (name, max height, Mbps, sharp text). Default: Balanced.
+const PHONE_PRESETS: &[(&str, u32, u32, bool)] = &[("Low data", 540, 3, false), ("Balanced", 720, 8, false), ("Best", 1080, 20, false), ("Sharp text", 1080, 20, true)];
+
 struct Outgoing {
     to: Pub,
     name: String,
@@ -72,6 +75,8 @@ pub struct App {
     /// Update download progress text (set from the download thread; "" = installer opened).
     dl_note: Arc<Mutex<Option<String>>>,
     cursor: (f32, f32),
+    /// PHONE_PRESETS index (picture quality).
+    preset: usize,
     /// Pinch zoom (1 = whole screen); the view follows the cursor when zoomed in.
     zoom: f32,
     g: Gesture,
@@ -100,6 +105,7 @@ impl App {
             update: Arc::new(Mutex::new(None)),
             dl_note: Arc::new(Mutex::new(None)),
             cursor: (0.5, 0.5),
+            preset: 1,
             zoom: 1.0,
             g: Gesture::default(),
         };
@@ -219,7 +225,9 @@ impl App {
                         let cipher = mine.cipher(&eph, session, true);
                         self.peer = o.name.clone();
                         let c = Client::start(sock, addrs, cipher, o.name, self.waker());
-                        c.set_quality(720, 10); // phone screen + mobile data friendly
+                        let (_, h, mbps, sharp) = PHONE_PRESETS[self.preset];
+                        c.set_quality(h, mbps);
+                        c.set_sharp(sharp);
                         self.cursor = (0.5, 0.5);
                         self.zoom = 1.0;
                         // Full screen (no status bar to pull down by accident) and keep the screen on.
@@ -723,6 +731,18 @@ or have permission to use."), 11.5, t::MUTED);
                     }
                     if t::tile(ui, Icon::Close, &tr("Disconnect"), Some(t::DANGER), w).clicked() {
                         act = Some("bye");
+                    }
+                });
+                // Picture quality presets.
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    for (i, (name, ..)) in PHONE_PRESETS.iter().enumerate() {
+                        if ui.add_sized([(320.0 - 12.0) / 4.0, 30.0], egui::Button::selectable(self.preset == i, RichText::new(tr(name)).size(12.0))).clicked() && self.preset != i {
+                            self.preset = i;
+                            let (_, h, mbps, sharp) = PHONE_PRESETS[i];
+                            c.set_quality(h, mbps);
+                            c.set_sharp(sharp);
+                        }
                     }
                 });
                 ui.horizontal(|ui| {
