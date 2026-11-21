@@ -172,6 +172,11 @@ impl Identity {
         std::fs::write(p, serde_json::to_string(&Stored { name: self.name.clone(), secret, old: self.old.clone(), renamed_at: self.renamed_at }).unwrap()).is_ok()
     }
 
+    /// Test only: the identity file as a phone stores it (no DPAPI), for the Android emulator.
+    pub fn phone_file(&self) -> String {
+        serde_json::to_string(&Stored { name: self.name.clone(), secret: self.secret.to_bytes().to_vec(), old: vec![], renamed_at: 0 }).unwrap()
+    }
+
     fn shared_key(&self, other: &Pub, ctx: &[u8]) -> [u8; 32] {
         let dh = self.secret.diffie_hellman(&PublicKey::from(*other));
         let (a, b) = if self.public < *other { (self.public, *other) } else { (*other, self.public) };

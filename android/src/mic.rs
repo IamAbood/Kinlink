@@ -110,3 +110,21 @@ pub fn download_and_install(url: &str, file: &str, report: impl Fn(String) + Sen
     });
     Ok(())
 }
+
+
+/// Window.addFlags/clearFlags on the activity (`activity` = AndroidApp::activity_as_ptr). Must run on
+/// the Java UI thread. android-activity's own set_window_flags deadlocks against its event loop.
+pub fn window_flags(activity: usize, add: i32, clear: i32) {
+    let ctx = ndk_context::android_context();
+    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) };
+    let r: Result<(), jni::errors::Error> = vm.attach_current_thread(|env| {
+        let activity = unsafe { JObject::from_raw(env, activity as jni::sys::jobject) };
+        let window = env.call_method(&activity, jni_str!("getWindow"), jni_sig!("()Landroid/view/Window;"), &[])?.l()?;
+        env.call_method(&window, jni_str!("clearFlags"), jni_sig!("(I)V"), &[JValue::Int(clear)])?;
+        env.call_method(&window, jni_str!("addFlags"), jni_sig!("(I)V"), &[JValue::Int(add)])?;
+        Ok(())
+    });
+    if let Err(e) = r {
+        log::error!("window flags: {e}");
+    }
+}

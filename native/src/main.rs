@@ -176,6 +176,8 @@ fn pair_test_profiles() {
         println!("{p}: {} (friends: {})", me.id(), friends.iter().map(|f| f.id()).collect::<Vec<_>>().join(", "));
         signal::write_friends(&settings::data_dir().unwrap().join("friends.json"), friends);
     }
+    // testA as a phone: push identity-phone.json as identity.json into the app's files dir.
+    let _ = std::fs::write(settings::data_dir().unwrap().parent().unwrap().join("ParsecCloneNative-testA").join("identity-phone.json"), a.phone_file());
 }
 
 /// Needs the helper service. Normal desktop -> secure=false + frame; then (while a UAC prompt is up)

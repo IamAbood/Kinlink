@@ -15,7 +15,7 @@ use winit::application::ApplicationHandler;
 use winit::event::{ElementState, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::keyboard::{Key, NamedKey};
-use winit::platform::android::activity::{AndroidApp, WindowManagerFlags};
+use winit::platform::android::activity::AndroidApp;
 use winit::window::{Window, WindowId};
 
 /// Trackpad speed: fraction of the PC screen per phone-screen width swiped.
@@ -174,8 +174,18 @@ impl App {
         }
     }
 
+    /// In a session: full screen (no status bar to pull down by accident) + keep the screen on.
+    fn window_flags(&self, on: bool) {
+        // Not android-activity's set_window_flags: it takes a write lock the event loop holds while
+        // it runs our handlers, which froze the app on connect / disconnect.
+        const FLAGS: i32 = 0x400 | 0x80; // FLAG_FULLSCREEN | FLAG_KEEP_SCREEN_ON
+        let (add, clear) = if on { (FLAGS, 0) } else { (0, FLAGS) };
+        let activity = self.android.activity_as_ptr() as usize;
+        self.android.run_on_java_main_thread(Box::new(move || crate::mic::window_flags(activity, add, clear)));
+    }
+
     fn disconnect(&mut self, why: Option<String>) {
-        self.android.set_window_flags(WindowManagerFlags::empty(), WindowManagerFlags::FULLSCREEN | WindowManagerFlags::KEEP_SCREEN_ON);
+        self.window_flags(false);
         self.zoom = 1.0;
         self.pad_mode = false;
         self.pad.release();
@@ -213,7 +223,7 @@ impl App {
                         self.cursor = (0.5, 0.5);
                         self.zoom = 1.0;
                         // Full screen (no status bar to pull down by accident) and keep the screen on.
-                        self.android.set_window_flags(WindowManagerFlags::FULLSCREEN | WindowManagerFlags::KEEP_SCREEN_ON, WindowManagerFlags::empty());
+                        self.window_flags(true);
                         self.client = Some(c);
                     }
                     Sig::ConnectNo { req, reason } if req == o.req => {
@@ -659,7 +669,7 @@ or have permission to use."), 11.5, t::MUTED);
         if self.zoom > 1.01 && !self.pad_mode {
             egui::Area::new(egui::Id::new("zoom_note")).anchor(egui::Align2::RIGHT_TOP, [-14.0, 30.0]).show(ctx, |ui| {
                 egui::Frame::NONE.fill(egui::Color32::from_black_alpha(150)).corner_radius(10.0).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
-                    ui.label(RichText::new(format!("{:.1}×", self.zoom)).size(12.0).color(egui::Color32::WHITE));
+                    ui.add(egui::Label::new(RichText::new(format!("{:.1}×", self.zoom)).size(12.0).color(egui::Color32::WHITE)).extend());
                 });
             });
         }

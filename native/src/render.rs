@@ -93,7 +93,11 @@ fn open_gpu(window: &Arc<Window>) -> anyhow::Result<(wgpu::Surface<'static>, wgp
             }))?;
             let info = adapter.get_info();
             crate::plog!("graphics: {} ({:?}, driver {} {})", info.name, info.backend, info.driver, info.driver_info);
-            let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
+            let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                // Ask only for what this GPU has (weak/software GPUs fail the default limits).
+                required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+                ..Default::default()
+            }))?;
             Ok((surface, adapter, device, queue))
         };
         match attempt() {
