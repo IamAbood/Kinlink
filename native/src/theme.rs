@@ -137,6 +137,7 @@ pub enum Icon {
     Menu,
     Shield,
     Keyboard,
+    Gamepad,
 }
 
 /// Draws a small line icon centered in `r`.
@@ -265,6 +266,13 @@ pub fn icon(p: &Painter, r: Rect, i: Icon, color: Color32) {
             line((12.0, 21.5), (5.0, 14.0));
             line((5.0, 14.0), (4.0, 6.0));
             line((4.0, 6.0), (12.0, 2.5));
+        }
+        Icon::Gamepad => {
+            p.rect_stroke(Rect::from_min_max(c(2.0, 7.0), c(22.0, 18.0)), 5.0 * s, st, egui::StrokeKind::Middle);
+            line((6.0, 12.5), (10.0, 12.5));
+            line((8.0, 10.5), (8.0, 14.5));
+            p.circle_filled(c(15.5, 11.0), 1.2 * s, color);
+            p.circle_filled(c(18.0, 13.5), 1.2 * s, color);
         }
         Icon::Keyboard => {
             p.rect_stroke(Rect::from_min_max(c(2.0, 6.0), c(22.0, 18.0)), 2.0 * s, st, egui::StrokeKind::Middle);

@@ -40,6 +40,7 @@ mod settings;
 #[path = "../../native/src/voice.rs"]
 mod voice;
 mod mic;
+mod gamepad;
 
 mod app;
 

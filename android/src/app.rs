@@ -59,6 +59,9 @@ pub struct App {
     menu: bool,
     keyboard: bool,
     muted: bool,
+    /// Controller mode: the screen is a gamepad instead of a trackpad.
+    pad_mode: bool,
+    pad: crate::gamepad::TouchPad,
     /// A newer release tag found on GitHub.
     update: Arc<Mutex<Option<String>>>,
     cursor: (f32, f32),
@@ -83,6 +86,8 @@ impl App {
             menu: false,
             keyboard: false,
             muted: false,
+            pad_mode: false,
+            pad: Default::default(),
             update: Arc::new(Mutex::new(None)),
             cursor: (0.5, 0.5),
             g: Gesture::default(),
@@ -159,7 +164,10 @@ impl App {
     }
 
     fn disconnect(&mut self, why: Option<String>) {
+        self.pad_mode = false;
+        self.pad.release();
         if let Some(c) = self.client.take() {
+            c.input(Input::PadRemove { id: 0 });
             c.input(Input::ReleaseAll);
             c.disconnect();
         }
@@ -559,8 +567,12 @@ or have permission to use."), 11.5, t::MUTED);
         let Some(c) = &self.client else { return };
         let state = c.state();
         let stats = c.stats();
+        if self.pad_mode {
+            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("pad")));
+            self.pad.draw(&painter, ctx.content_rect());
+        }
         // Remote cursor where the trackpad puts it.
-        if let (State::Connected { .. }, Some((x, y, w, h))) = (&state, self.gfx.as_ref().and_then(|g| g.video_rect())) {
+        if let (false, State::Connected { .. }, Some((x, y, w, h))) = (self.pad_mode, &state, self.gfx.as_ref().and_then(|g| g.video_rect())) {
             let ppp = ctx.pixels_per_point();
             let p = egui::pos2((x + self.cursor.0 * w) / ppp, (y + self.cursor.1 * h) / ppp);
             let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("cursor")));
@@ -619,6 +631,11 @@ or have permission to use."), 11.5, t::MUTED);
                         act = Some("bye");
                     }
                 });
+                ui.horizontal(|ui| {
+                    if t::tile(ui, Icon::Gamepad, &if self.pad_mode { tr("Trackpad") } else { tr("Controller") }, self.pad_mode.then_some(t::MINT), 320.0).clicked() {
+                        act = Some("pad");
+                    }
+                });
                 let (talking, mic_err) = c.voice_status();
                 if !talking.is_empty() {
                     ui.label(RichText::new(trf("Talking: {}", &[&talking.join(", ")])).color(t::MINT_SOFT));
@@ -645,6 +662,14 @@ or have permission to use."), 11.5, t::MUTED);
         match act {
             Some("menu") => self.menu = !self.menu,
             Some("kb") => self.set_keyboard(!self.keyboard),
+            Some("pad") => {
+                self.pad_mode = !self.pad_mode;
+                self.menu = false;
+                self.pad.release();
+                if !self.pad_mode {
+                    self.send(Input::PadRemove { id: 0 });
+                }
+            }
             Some("mic") => {
                 if let Some(c) = &self.client {
                     if c.mic_on() {
@@ -742,7 +767,16 @@ impl ApplicationHandler<()> for App {
                 // A finger that lands on the menu belongs to egui; anywhere else is the trackpad.
                 let ppp = self.ctx.pixels_per_point();
                 let pos = egui::pos2(t.location.x as f32 / ppp, t.location.y as f32 / ppp);
-                let mine = self.g.fingers.contains_key(&t.id) || (t.phase == TouchPhase::Started && self.ctx.layer_id_at(pos).is_none());
+                let free = t.phase == TouchPhase::Started && self.ctx.layer_id_at(pos).is_none();
+                if self.pad_mode && (free || self.pad.owns(t.id)) {
+                    let screen = self.ctx.content_rect();
+                    if let Some(st) = self.pad.touch(t.id, t.phase, pos, screen) {
+                        self.send(Input::Pad { id: 0, state: st });
+                    }
+                    self.redraw();
+                    return;
+                }
+                let mine = self.g.fingers.contains_key(&t.id) || free;
                 if mine {
                     self.touch(t.id, t.phase, t.location.x as f32, t.location.y as f32);
                     self.redraw();
