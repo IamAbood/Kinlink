@@ -287,6 +287,7 @@ pub fn get(en: &str) -> Option<&'static str> {
         "Mouse and keyboard are turned off for you on that PC. Ask its owner to allow them in Friends." => "الماوس ولوحة المفاتيح مغلقان لك على ذلك الجهاز. اطلب من صاحبه السماح بهما من الأصدقاء.",
         "Mouse is turned off for you on that PC. Ask its owner to allow it in Friends." => "الماوس مغلق لك على ذلك الجهاز. اطلب من صاحبه السماح به من الأصدقاء.",
         "Keyboard is turned off for you on that PC. Ask its owner to allow it in Friends." => "لوحة المفاتيح مغلقة لك على ذلك الجهاز. اطلب من صاحبه السماح بها من الأصدقاء.",
+        "Couldn't open the browser ({}). Open this link yourself:" => "تعذر فتح المتصفح ({}). افتح هذا الرابط بنفسك:",
         _ => return None,
     })
 }

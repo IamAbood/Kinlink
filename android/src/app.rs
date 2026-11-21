@@ -496,9 +496,13 @@ or have permission to use."), 11.5, t::MUTED);
                     egui::Frame::NONE.fill(egui::Color32::from_rgb(0x10, 0x26, 0x1E)).stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(0x1F, 0x4D, 0x3B))).corner_radius(12.0).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.label(RichText::new(trf("Kinlink {} is available", &[&tag])).font(egui::FontId::new(14.0, t::bold())).color(t::MINT_SOFT));
+                        const APK: &str = "https://github.com/IamAbood/Kinlink/releases/latest/download/Kinlink.apk";
                         if t::primary(ui, &tr("Download"), Some(Icon::Update), true).clicked() {
-                            crate::mic::open_url("https://github.com/IamAbood/Kinlink/releases/latest/download/Kinlink.apk");
+                            if let Err(e) = crate::mic::open_url(APK) {
+                                self.message = Some(tlf("Couldn't open the browser ({}). Open this link yourself:", &[&e]));
+                            }
                         }
+                        ui.label(RichText::new("github.com/IamAbood/Kinlink/releases").size(11.5).color(t::SOFT));
                     });
                 }
                 if let Some(m) = &self.message {

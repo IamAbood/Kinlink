@@ -27,8 +27,8 @@ pub fn ensure_mic() -> bool {
     })
 }
 
-/// Opens a web link in the phone's browser (Android Intent.ACTION_VIEW).
-pub fn open_url(url: &str) {
+/// Opens a web link in the phone's browser (Android Intent.ACTION_VIEW). Err = why it failed.
+pub fn open_url(url: &str) -> Result<(), String> {
     let ctx = ndk_context::android_context();
     let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) };
     let r: Result<(), jni::errors::Error> = vm.attach_current_thread(|env| {
@@ -37,10 +37,13 @@ pub fn open_url(url: &str) {
         let uri = env.call_static_method(jni_str!("android/net/Uri"), jni_str!("parse"), jni_sig!("(Ljava/lang/String;)Landroid/net/Uri;"), &[JValue::Object(&jurl)])?.l()?;
         let action = env.new_string("android.intent.action.VIEW")?;
         let intent = env.new_object(jni_str!("android/content/Intent"), jni_sig!("(Ljava/lang/String;Landroid/net/Uri;)V"), &[JValue::Object(&action), JValue::Object(&uri)])?;
+        // FLAG_ACTIVITY_NEW_TASK: required when Android doesn't treat the caller as an activity.
+        env.call_method(&intent, jni_str!("addFlags"), jni_sig!("(I)Landroid/content/Intent;"), &[JValue::Int(0x1000_0000)])?;
         env.call_method(&activity, jni_str!("startActivity"), jni_sig!("(Landroid/content/Intent;)V"), &[JValue::Object(&intent)])?;
         Ok(())
     });
-    if let Err(e) = r {
+    r.map_err(|e| {
         log::error!("open url: {e}");
-    }
+        e.to_string()
+    })
 }
