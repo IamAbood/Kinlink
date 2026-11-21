@@ -23,6 +23,8 @@ mod notify;
 mod proto;
 mod rec;
 mod rtl;
+mod i18n;
+mod i18n_ar;
 mod render;
 mod scale;
 mod settings;

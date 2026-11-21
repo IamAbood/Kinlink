@@ -24,9 +24,37 @@ pub fn show(s: &str) -> String {
     s.split('\n').map(line).collect::<Vec<_>>().join("\n")
 }
 
+/// Brackets in right-to-left text are drawn mirrored.
+fn mirror(c: char) -> char {
+    match c {
+        '(' => ')',
+        ')' => '(',
+        '[' => ']',
+        ']' => '[',
+        '{' => '}',
+        '}' => '{',
+        '<' => '>',
+        '>' => '<',
+        '«' => '»',
+        '»' => '«',
+        _ => c,
+    }
+}
+
 fn line(l: &str) -> String {
     let info = BidiInfo::new(l, None);
-    let visual: String = info.paragraphs.iter().map(|p| info.reorder_line(p, p.range.clone()).into_owned()).collect();
+    let mut visual = String::with_capacity(l.len());
+    for p in &info.paragraphs {
+        let (levels, runs) = info.visual_runs(p, p.range.clone());
+        for run in runs {
+            let text = &l[run.clone()];
+            if levels[run.start].is_rtl() {
+                visual.extend(text.chars().rev().map(mirror));
+            } else {
+                visual.push_str(text);
+            }
+        }
+    }
     // Undo the reversal inside each run of right-to-left letters (egui's shaper redoes it).
     let mut out = String::with_capacity(visual.len());
     let mut run: Vec<char> = Vec::new();
@@ -85,5 +113,7 @@ mod tests {
         assert_eq!(show("kareem: مرحبا كيف"), "kareem: كيف مرحبا");
         // Arabic first with an English word inside.
         assert_eq!(show("افتح PC الآن"), "الآن PC افتح");
+        // Brackets are mirrored in right-to-left text.
+        assert_eq!(show("أ (ب)"), "(ب) أ");
     }
 }

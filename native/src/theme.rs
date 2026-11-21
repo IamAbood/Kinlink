@@ -411,3 +411,30 @@ pub fn danger_wide(ui: &mut Ui, text: &str, enabled: bool) -> Response {
     p.text(rect.center(), egui::Align2::CENTER_CENTER, text, FontId::new(13.5, bold()), if enabled { DANGER } else { DANGER.gamma_multiply(0.5) });
     resp
 }
+
+/// A paragraph that may wrap. Arabic: break the lines by words in reading order first, then put
+/// each line right to left (egui would otherwise wrap the reordered text back to front).
+pub fn para(ui: &mut egui::Ui, text: &str, size: f32, color: Color32) {
+    if !crate::rtl::has_rtl(text) {
+        ui.label(egui::RichText::new(text).size(size).color(color));
+        return;
+    }
+    let font = egui::FontId::proportional(size);
+    let max = ui.available_width().max(60.0);
+    let width = |s: &str| ui.painter().layout_no_wrap(crate::rtl::show(s), font.clone(), color).size().x;
+    let mut lines: Vec<String> = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut cur = String::new();
+        for w in paragraph.split(' ') {
+            let cand = if cur.is_empty() { w.to_string() } else { format!("{cur} {w}") };
+            if !cur.is_empty() && width(&cand) > max {
+                lines.push(std::mem::take(&mut cur));
+                cur = w.to_string();
+            } else {
+                cur = cand;
+            }
+        }
+        lines.push(cur);
+    }
+    ui.add(egui::Label::new(egui::RichText::new(crate::rtl::show(&lines.join("\n"))).size(size).color(color)).wrap_mode(egui::TextWrapMode::Extend));
+}

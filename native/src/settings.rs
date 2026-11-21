@@ -22,11 +22,13 @@ pub struct Settings {
     pub hint_seen: bool,
     /// Windows notification when a friend comes online.
     pub notify_online: bool,
+    /// Interface language: "en", "ar", or "" = follow Windows.
+    pub language: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { hosting: true, port: crate::proto::DEFAULT_PORT, max_mbps: 30, fps: 60, hardware: true, upnp: true, autostart_init: false, fullscreen_connect: true, hint_seen: false, notify_online: true }
+        Self { hosting: true, port: crate::proto::DEFAULT_PORT, max_mbps: 30, fps: 60, hardware: true, upnp: true, autostart_init: false, fullscreen_connect: true, hint_seen: false, notify_online: true, language: String::new() }
     }
 }
 

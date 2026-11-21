@@ -20,6 +20,10 @@ mod net;
 mod proto;
 #[path = "../../native/src/render.rs"]
 mod render;
+#[path = "../../native/src/i18n.rs"]
+mod i18n;
+#[path = "../../native/src/i18n_ar.rs"]
+mod i18n_ar;
 #[path = "../../native/src/rtl.rs"]
 mod rtl;
 #[path = "../../native/src/signal.rs"]
@@ -50,6 +54,7 @@ fn android_main(android: AndroidApp) {
         let _ = settings::DATA_DIR.set(dir);
     }
     applog::init();
+    app::load_language();
     let handle = android.clone();
     let el = winit::event_loop::EventLoop::<()>::with_user_event().with_android_app(android).build().expect("event loop");
     let mut app = app::App::new(handle, el.create_proxy());
