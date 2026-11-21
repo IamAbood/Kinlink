@@ -454,6 +454,8 @@ fn selftest(software: bool) -> i32 {
     let start = Instant::now();
     let (mut f1, mut f2, mut f2_after_kick) = (0, 0, 0);
     let (mut sent, mut kicked, mut last2) = (false, false, (0, 0));
+    let mut clip_set = false;
+    let saved_clip = arboard::Clipboard::new().ok().and_then(|mut c| c.get_text().ok());
     let (mut rec_started, mut rec_stopped) = (false, false);
     let (mut heard_host, mut heard_g1) = (false, false);
     while start.elapsed() < Duration::from_secs(10) {
@@ -504,6 +506,12 @@ fn selftest(software: bool) -> i32 {
             heard_g1 |= g1_hears.iter().any(|n| n == "guest2#0002");
             std::thread::sleep(Duration::from_millis(19));
         }
+        if !clip_set && start.elapsed() > Duration::from_secs(2) {
+            // Copy a picture: it should reach the other side as clipboard content.
+            clip_set = true;
+            let px: Vec<u8> = (0..64 * 64).flat_map(|i| [(i % 256) as u8, 40, 200, 255]).collect();
+            let _ = arboard::Clipboard::new().and_then(|mut c| c.set_image(arboard::ImageData { width: 64, height: 64, bytes: px.into() }));
+        }
         if !kicked && start.elapsed() > Duration::from_secs(5) {
             kicked = true;
             h.kick("guest1#0001");
@@ -513,7 +521,18 @@ fn selftest(software: bool) -> i32 {
     }
     let hs = h.status();
     // Files: every received copy must match its source byte for byte.
-    let recv: Vec<Vec<u8>> = std::fs::read_dir(tmp.join("recv")).unwrap().flatten().map(|e| std::fs::read(e.path()).unwrap()).collect();
+    let recv: Vec<Vec<u8>> = std::fs::read_dir(tmp.join("recv")).unwrap().flatten().filter(|e| e.path().is_file()).map(|e| std::fs::read(e.path()).unwrap()).collect();
+    let clip_pngs = std::fs::read_dir(tmp.join("recv").join("Clipboard")).map(|d| d.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "png")).count()).unwrap_or(0);
+    println!("clipboard: copied picture arrived on the other side x{clip_pngs}");
+    // ...and a received picture goes onto the clipboard, ready to paste.
+    let pasted = std::fs::read_dir(tmp.join("recv").join("Clipboard")).ok().and_then(|mut d| d.next()).and_then(|e| e.ok()).map(|e| {
+        let ok = clip::set_received(&[e.path()], true).is_ok();
+        ok && arboard::Clipboard::new().ok().and_then(|mut c| c.get_image().ok()).is_some_and(|i| i.width == 64 && i.height == 64)
+    }) == Some(true);
+    println!("clipboard: received picture is pasteable={pasted}");
+    if let Some(t) = &saved_clip {
+        let _ = arboard::Clipboard::new().and_then(|mut c| c.set_text(t.clone()));
+    }
     let got_guest = recv.iter().filter(|d| **d == guest_file).count();
     let got_host = recv.iter().filter(|d| **d == host_file).count();
     println!("files: host got guest2's 3 MB file x{got_guest}; guests got the host's 1 MB file x{got_host} (of {} files)", recv.len());
@@ -533,7 +552,7 @@ fn selftest(software: bool) -> i32 {
     println!("screenshot png: {} bytes, valid={png_ok}; recording read back: {probe:?}", png.len());
     let rec_ok = matches!(probe, Some(Ok((v, a, secs))) if v >= 5 && secs > 4.0); // video only arrives when the screen changes; audio only while something plays
     let _ = std::fs::remove_dir_all(&tmp);
-    let files_ok = heard_host && heard_g1 && png_ok && rec_ok && got_guest == 1 && got_host == 2 && chat_host && chat_g1 && chat_g2;
+    let files_ok = heard_host && heard_g1 && png_ok && rec_ok && got_guest == 1 && got_host == 2 && chat_host && chat_g1 && chat_g2 && clip_pngs >= 1 && pasted;
     println!("host: encoder={} | {}", hs.encoder, hs.stats);
     println!("guest1: frames={f1} state={:?}", g1.state());
     println!("guest2: frames={f2} (after kick {f2_after_kick}) last_frame={}x{} state={:?}", last2.0, last2.1, matches!(g2.state(), client::State::Connected { .. }));

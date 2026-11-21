@@ -116,6 +116,12 @@ pub fn default_save_dir() -> Option<PathBuf> {
 impl Transfers {
     /// Starts sending a file; returns the offer to send to the other side.
     pub fn send(&mut self, path: &Path) -> Result<Msg, String> {
+        let name = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "file".into());
+        self.send_as(path, &name)
+    }
+
+    /// Like send, under another name (clipboard transfers carry a marker in the name).
+    pub fn send_as(&mut self, path: &Path, name: &str) -> Result<Msg, String> {
         let file = File::open(path).map_err(|e| e.to_string())?;
         let size = file.metadata().map_err(|e| e.to_string())?.len();
         if path.is_dir() {
@@ -123,7 +129,7 @@ impl Transfers {
         }
         self.next_id = self.next_id.wrapping_add(1);
         let id = self.next_id;
-        let name = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "file".into());
+        let name = name.to_string();
         let chunks = chunks_for(size);
         self.out.insert(id, Out { name: name.clone(), size, file, chunks, base: 0, acked: vec![false; chunks as usize], sent: HashMap::new(), started: Instant::now(), finished: false, got_ack: false });
         Ok(Msg::FileOffer { id, name, size })
@@ -135,6 +141,13 @@ impl Transfers {
             Msg::FileOffer { id, name, size } => {
                 if self.inc.contains_key(&id) || self.pending.iter().any(|p| p.0 == id) {
                     return vec![];
+                }
+                // Copied with Ctrl+C on the other PC: goes straight to the clipboard (size-capped).
+                if crate::clip::parse_marked(&name).is_some() {
+                    if size > crate::clip::MAX_FILES {
+                        return vec![Msg::FileCancel { id }];
+                    }
+                    return self.start_receiving(id, name, size);
                 }
                 if self.ask.unwrap_or_else(|| ASK.load(Relaxed)) {
                     self.pending.push((id, name, size, Instant::now()));
@@ -205,9 +218,17 @@ impl Transfers {
     }
 
     fn start_receiving(&mut self, id: u32, name: String, size: u64) -> Vec<Msg> {
-        let Some(dir) = self.save_dir.clone().or_else(default_save_dir) else { return vec![Msg::FileCancel { id }] };
+        let Some(mut dir) = self.save_dir.clone().or_else(default_save_dir) else { return vec![Msg::FileCancel { id }] };
+        // Clipboard content: Downloads\Kinlink\Clipboard, under its real name.
+        let save_as = match crate::clip::parse_marked(&name) {
+            Some((_, _, _, real)) => {
+                dir = dir.join("Clipboard");
+                real
+            }
+            None => name.clone(),
+        };
         let _ = std::fs::create_dir_all(&dir);
-        let Some((path, file)) = create_unique(&dir, &name) else { return vec![Msg::FileCancel { id }] };
+        let Some((path, file)) = create_unique(&dir, &save_as) else { return vec![Msg::FileCancel { id }] };
         let _ = file.set_len(size);
         let chunks = chunks_for(size);
         self.inc.insert(id, In { name, size, path, file, chunks, have: vec![false; chunks as usize], have_until: 0, since_ack: 0, last_ack: Instant::now(), finished: false });

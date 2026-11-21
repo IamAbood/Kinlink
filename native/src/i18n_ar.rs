@@ -277,6 +277,10 @@ pub fn get(en: &str) -> Option<&'static str> {
         "{} · {} min left" => "{} · متبقٍ {} د",
         "Revoke" => "إلغاء",
         "Copy link" => "نسخ الرابط",
+        // ---- 0.21 clipboard
+        "Copied a picture from {}: paste with Ctrl+V" => "تم نسخ صورة من {}: الصقها بـ Ctrl+V",
+        "Copied {} file(s) from {}: paste with Ctrl+V" => "تم نسخ {} ملف من {}: الصقها بـ Ctrl+V",
+        "Couldn't put it on the clipboard: {}" => "تعذر وضعه في الحافظة: {}",
         _ => return None,
     })
 }

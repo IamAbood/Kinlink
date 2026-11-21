@@ -123,6 +123,8 @@ pub struct App {
     /// Friend whose chat window is open, and what's being typed.
     chat_with: Option<Pub>,
     chat_draft: String,
+    /// Copied pictures/files arriving from the other PC: batch -> (expected, is_image, paths).
+    clip_batches: std::collections::HashMap<String, (usize, bool, Vec<std::path::PathBuf>)>,
     /// Joining by invite: (host id, code, since).
     pending_join: Option<(String, String, Instant)>,
     join_text: String,
@@ -205,6 +207,7 @@ impl App {
             chat_with: None,
             chat_draft: String::new(),
             pending_join: None,
+            clip_batches: Default::default(),
             join_text: String::new(),
             invite_perms: Perms { mouse: false, keyboard: false, gamepad: true },
             last_invite: None,
@@ -938,7 +941,15 @@ impl App {
     /// Chat window, transfer progress and the notification bubble during a session.
     fn session_extras(&mut self, ctx: &egui::Context, frame: &egui::Frame) {
         let Some(c) = &self.client else { return };
-        for p in c.take_finished_files() {
+        let finished = c.take_finished_files();
+        let peer = self.peer.clone();
+        for p in finished {
+            if let Some(msg) = self.on_clip_transfer(&p, &peer) {
+                if !msg.is_empty() {
+                    self.bubble = Some((msg, Instant::now()));
+                }
+                continue;
+            }
             let text = match (&p.failed, p.sending) {
                 (Some(e), _) => format!("{}: {e}", p.name),
                 (None, true) => tlf("Sent {}", &[&p.name]),
@@ -946,6 +957,7 @@ impl App {
             };
             self.bubble = Some((text, Instant::now()));
         }
+        let Some(c) = &self.client else { return };
         for n in c.take_notices() {
             self.bubble = Some((n, Instant::now()));
         }
@@ -2343,6 +2355,12 @@ Updating the graphics driver usually fixes this.");
         }
         let finished = self.host.as_ref().map(|h| h.take_finished()).unwrap_or_default();
         for (guest, p) in finished {
+            if let Some(msg) = self.on_clip_transfer(&p, &guest) {
+                if !msg.is_empty() {
+                    self.toast(msg);
+                }
+                continue;
+            }
             if let (None, false) = (&p.failed, p.sending) {
                 self.toast(tlf("Received {} from {} (Downloads\\Kinlink)", &[&p.name, &guest]));
                 crate::notify::toast(&tlf("{} sent you {}", &[&guest, &p.name]), &tl("Saved in Downloads\\Kinlink"));
@@ -2714,5 +2732,28 @@ impl App {
         if close {
             self.chat_with = None;
         }
+    }
+}
+
+impl App {
+    /// Handles a finished transfer that carried clipboard content. None = an ordinary file.
+    /// Some("") = handled quietly; Some(msg) = done, tell the user.
+    fn on_clip_transfer(&mut self, p: &crate::files::Progress, from: &str) -> Option<String> {
+        let (batch, count, image, _) = crate::clip::parse_marked(&p.name)?;
+        if p.sending || p.failed.is_some() {
+            return Some(String::new());
+        }
+        let path = p.path.clone()?;
+        let e = self.clip_batches.entry(batch.clone()).or_insert((count, image, Vec::new()));
+        e.2.push(path);
+        if e.2.len() < e.0 {
+            return Some(String::new());
+        }
+        let (n, image, paths) = self.clip_batches.remove(&batch).unwrap();
+        Some(match crate::clip::set_received(&paths, image) {
+            Ok(()) if image => tlf("Copied a picture from {}: paste with Ctrl+V", &[from]),
+            Ok(()) => tlf("Copied {} file(s) from {}: paste with Ctrl+V", &[&n.to_string(), from]),
+            Err(e) => tlf("Couldn't put it on the clipboard: {}", &[&e]),
+        })
     }
 }

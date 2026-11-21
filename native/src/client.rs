@@ -348,6 +348,15 @@ fn control_loop(sh: Arc<Shared>) {
             if let Some(m) = m {
                 sh.send(&m);
             }
+            let rich = sh.clip.lock().unwrap().poll_rich();
+            if let Some(rich) = rich {
+                for (path, name) in crate::clip::marked_names(&rich) {
+                    let offer = sh.files.lock().unwrap().send_as(&path, &name);
+                    if let Ok(offer) = offer {
+                        sh.send(&offer);
+                    }
+                }
+            }
         }
         thread::sleep(Duration::from_millis(250));
     }

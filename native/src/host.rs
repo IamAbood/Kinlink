@@ -895,8 +895,18 @@ fn audio_loop(sh: Arc<Shared>) {
 fn clip_loop(sh: Arc<Shared>) {
     while !sh.stop.load(SeqCst) {
         thread::sleep(Duration::from_millis(400));
-        let outgoing: Vec<(usize, SocketAddr, Arc<Cipher>, Msg)> =
+        let mut outgoing: Vec<(usize, SocketAddr, Arc<Cipher>, Msg)> =
             sh.sessions.lock().unwrap().iter_mut().filter_map(|s| s.clip.poll().map(|m| (s.sock, s.addr, s.cipher.clone(), m))).collect();
+        // Copied pictures/files go to every guest through the file transfer.
+        for s in sh.sessions.lock().unwrap().iter_mut() {
+            if let Some(rich) = s.clip.poll_rich() {
+                for (path, name) in crate::clip::marked_names(&rich) {
+                    if let Ok(offer) = s.files.send_as(&path, &name) {
+                        outgoing.push((s.sock, s.addr, s.cipher.clone(), offer));
+                    }
+                }
+            }
+        }
         for (sock, addr, cipher, m) in outgoing {
             let _ = sh.socks[sock].send_to(&cipher.seal(&encode(&m)), addr);
         }
