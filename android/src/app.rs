@@ -201,6 +201,13 @@ impl App {
             }
             Event::Toast(m) => self.message = Some(m),
             Event::Cancelled { .. } | Event::FriendOnline(_) | Event::FriendRequest(_) | Event::Message { .. } => {}
+            // The phone can't host: turn invite connections down.
+            Event::GuestConnect { from, name, req, .. } => {
+                if let Some(s) = &self.signal {
+                    s.send_to(&name, &from, Sig::ConnectNo { req, reason: "is on a phone (can't be controlled)".into() });
+                }
+            }
+            Event::JoinReady { .. } => {}
         }
     }
 
