@@ -47,3 +47,66 @@ pub fn open_url(url: &str) -> Result<(), String> {
         e.to_string()
     })
 }
+
+/// Downloads the APK with Android's download manager (shows its own progress notification), then
+/// opens the installer. `report` gets status lines for the UI. Err = couldn't even start.
+pub fn download_and_install(url: &str, file: &str, report: impl Fn(String) + Send + 'static) -> Result<(), String> {
+    let ctx = ndk_context::android_context();
+    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) };
+    let id: Result<i64, jni::errors::Error> = vm.attach_current_thread(|env| {
+        let activity = unsafe { JObject::from_raw(env, ctx.context().cast()) };
+        let svc = env.new_string("download")?;
+        let dm = env.call_method(&activity, jni_str!("getSystemService"), jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"), &[JValue::Object(&svc)])?.l()?;
+        let jurl = env.new_string(url)?;
+        let uri = env.call_static_method(jni_str!("android/net/Uri"), jni_str!("parse"), jni_sig!("(Ljava/lang/String;)Landroid/net/Uri;"), &[JValue::Object(&jurl)])?.l()?;
+        let req = env.new_object(jni_str!("android/app/DownloadManager$Request"), jni_sig!("(Landroid/net/Uri;)V"), &[JValue::Object(&uri)])?;
+        let title = env.new_string("Kinlink update")?;
+        env.call_method(&req, jni_str!("setTitle"), jni_sig!("(Ljava/lang/CharSequence;)Landroid/app/DownloadManager$Request;"), &[JValue::Object(&title)])?;
+        let mime = env.new_string("application/vnd.android.package-archive")?;
+        env.call_method(&req, jni_str!("setMimeType"), jni_sig!("(Ljava/lang/String;)Landroid/app/DownloadManager$Request;"), &[JValue::Object(&mime)])?;
+        // VISIBILITY_VISIBLE_NOTIFY_COMPLETED: tapping the finished notification also installs.
+        env.call_method(&req, jni_str!("setNotificationVisibility"), jni_sig!("(I)Landroid/app/DownloadManager$Request;"), &[JValue::Int(1)])?;
+        let (dir, name) = (env.new_string("Download")?, env.new_string(file)?);
+        env.call_method(&req, jni_str!("setDestinationInExternalPublicDir"), jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Landroid/app/DownloadManager$Request;"), &[JValue::Object(&dir), JValue::Object(&name)])?;
+        env.call_method(&dm, jni_str!("enqueue"), jni_sig!("(Landroid/app/DownloadManager$Request;)J"), &[JValue::Object(&req)])?.j()
+    });
+    let id = id.map_err(|e| {
+        log::error!("download: {e}");
+        e.to_string()
+    })?;
+    std::thread::spawn(move || {
+        // getUriForDownloadedFile stays null until the download has finished successfully.
+        for _ in 0..1200 {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let ctx = ndk_context::android_context();
+            let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) };
+            let done: Result<bool, jni::errors::Error> = vm.attach_current_thread(|env| {
+                let activity = unsafe { JObject::from_raw(env, ctx.context().cast()) };
+                let svc = env.new_string("download")?;
+                let dm = env.call_method(&activity, jni_str!("getSystemService"), jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"), &[JValue::Object(&svc)])?.l()?;
+                let uri = env.call_method(&dm, jni_str!("getUriForDownloadedFile"), jni_sig!("(J)Landroid/net/Uri;"), &[JValue::Long(id)])?.l()?;
+                if uri.is_null() {
+                    return Ok(false);
+                }
+                let action = env.new_string("android.intent.action.VIEW")?;
+                let intent = env.new_object(jni_str!("android/content/Intent"), jni_sig!("(Ljava/lang/String;)V"), &[JValue::Object(&action)])?;
+                let mime = env.new_string("application/vnd.android.package-archive")?;
+                env.call_method(&intent, jni_str!("setDataAndType"), jni_sig!("(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/Intent;"), &[JValue::Object(&uri), JValue::Object(&mime)])?;
+                // NEW_TASK | GRANT_READ_URI_PERMISSION
+                env.call_method(&intent, jni_str!("addFlags"), jni_sig!("(I)Landroid/content/Intent;"), &[JValue::Int(0x1000_0001)])?;
+                env.call_method(&activity, jni_str!("startActivity"), jni_sig!("(Landroid/content/Intent;)V"), &[JValue::Object(&intent)])?;
+                Ok(true)
+            });
+            match done {
+                Ok(true) => return report(String::new()),
+                Ok(false) => {}
+                Err(e) => {
+                    log::error!("install: {e}");
+                    return report(format!("Downloaded. Open the notification or your Downloads folder to install it. ({e})"));
+                }
+            }
+        }
+        report("The download didn't finish. Check the notification.".into());
+    });
+    Ok(())
+}

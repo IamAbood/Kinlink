@@ -69,6 +69,8 @@ pub struct App {
     pad: crate::gamepad::TouchPad,
     /// A newer release tag found on GitHub.
     update: Arc<Mutex<Option<String>>>,
+    /// Update download progress text (set from the download thread; "" = installer opened).
+    dl_note: Arc<Mutex<Option<String>>>,
     cursor: (f32, f32),
     /// Pinch zoom (1 = whole screen); the view follows the cursor when zoomed in.
     zoom: f32,
@@ -96,6 +98,7 @@ impl App {
             pad_mode: false,
             pad: Default::default(),
             update: Arc::new(Mutex::new(None)),
+            dl_note: Arc::new(Mutex::new(None)),
             cursor: (0.5, 0.5),
             zoom: 1.0,
             g: Gesture::default(),
@@ -490,6 +493,7 @@ or have permission to use."), 11.5, t::MUTED);
                         ui.label(RichText::new(format!("#{tag}")).font(egui::FontId::new(17.0, t::bold())).color(t::ACCENT_SOFT));
                     });
                     ui.label(RichText::new(if sig.online() { "Online" } else { "Connecting…" }).size(12.0).color(if sig.online() { t::MINT_SOFT } else { t::MUTED }));
+                    ui.label(RichText::new(concat!("v", env!("CARGO_PKG_VERSION"))).size(11.0).color(t::MUTED));
                 });
                 let newer = self.update.lock().unwrap().clone();
                 if let Some(tag) = newer {
@@ -497,10 +501,23 @@ or have permission to use."), 11.5, t::MUTED);
                         ui.set_width(ui.available_width());
                         ui.label(RichText::new(trf("Kinlink {} is available", &[&tag])).font(egui::FontId::new(14.0, t::bold())).color(t::MINT_SOFT));
                         const APK: &str = "https://github.com/IamAbood/Kinlink/releases/latest/download/Kinlink.apk";
-                        if t::primary(ui, &tr("Download"), Some(Icon::Update), true).clicked() {
-                            if let Err(e) = crate::mic::open_url(APK) {
-                                self.message = Some(tlf("Couldn't open the browser ({}). Open this link yourself:", &[&e]));
+                        let note = self.dl_note.lock().unwrap().clone();
+                        if t::primary(ui, &tr("Download"), Some(Icon::Update), note.is_none()).clicked() {
+                            let (slot, wake) = (self.dl_note.clone(), self.waker());
+                            *slot.lock().unwrap() = Some(tl("Downloading… the installer opens when it's done."));
+                            let report = move |m: String| {
+                                *slot.lock().unwrap() = if m.is_empty() { None } else { Some(m) };
+                                wake();
+                            };
+                            if let Err(e) = crate::mic::download_and_install(APK, &format!("Kinlink-{tag}.apk"), report) {
+                                *self.dl_note.lock().unwrap() = None;
+                                if let Err(e2) = crate::mic::open_url(APK) {
+                                    self.message = Some(tlf("Couldn't open the browser ({}). Open this link yourself:", &[&format!("{e}; {e2}")]));
+                                }
                             }
+                        }
+                        if let Some(n) = note {
+                            ui.label(RichText::new(crate::rtl::show(&n)).size(12.0).color(t::SOFT));
                         }
                         ui.label(RichText::new("github.com/IamAbood/Kinlink/releases").size(11.5).color(t::SOFT));
                     });
@@ -834,7 +851,7 @@ impl ApplicationHandler<()> for App {
                 // A finger that lands on the menu belongs to egui; anywhere else is the trackpad.
                 let ppp = self.ctx.pixels_per_point();
                 let pos = egui::pos2(t.location.x as f32 / ppp, t.location.y as f32 / ppp);
-                let free = t.phase == TouchPhase::Started && self.ctx.layer_id_at(pos).is_none();
+                let free = t.phase == TouchPhase::Started && self.ctx.layer_id_at(pos).is_none_or(|l| l.order == egui::Order::Background);
                 if self.pad_mode && (free || self.pad.owns(t.id)) {
                     let screen = self.ctx.content_rect();
                     if let Some(st) = self.pad.touch(t.id, t.phase, pos, screen) {
@@ -922,6 +939,11 @@ fn check_for_update(slot: Arc<Mutex<Option<String>>>, wake: impl Fn() + Send + '
         let Ok(body) = resp.body_mut().read_to_string() else { return };
         let Ok(j) = serde_json::from_str::<serde_json::Value>(&body) else { return };
         let Some(tag) = j["tag_name"].as_str() else { return };
+        // The APK is attached a few minutes after the release appears; don't offer a 404.
+        let has_apk = j["assets"].as_array().is_some_and(|a| a.iter().any(|x| x["name"] == "Kinlink.apk"));
+        if !has_apk {
+            return;
+        }
         if version_key(tag) > version_key(env!("CARGO_PKG_VERSION")) {
             *slot.lock().unwrap() = Some(tag.trim_start_matches('v').to_string());
             wake();

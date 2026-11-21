@@ -288,6 +288,7 @@ pub fn get(en: &str) -> Option<&'static str> {
         "Mouse is turned off for you on that PC. Ask its owner to allow it in Friends." => "الماوس مغلق لك على ذلك الجهاز. اطلب من صاحبه السماح به من الأصدقاء.",
         "Keyboard is turned off for you on that PC. Ask its owner to allow it in Friends." => "لوحة المفاتيح مغلقة لك على ذلك الجهاز. اطلب من صاحبه السماح بها من الأصدقاء.",
         "Couldn't open the browser ({}). Open this link yourself:" => "تعذر فتح المتصفح ({}). افتح هذا الرابط بنفسك:",
+        "Downloading… the installer opens when it's done." => "جارٍ التنزيل… سيفتح المثبّت عند الانتهاء.",
         _ => return None,
     })
 }
