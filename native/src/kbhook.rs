@@ -60,14 +60,51 @@ pub fn install(hwnd: HWND, wake: impl Fn() + Send + 'static) -> Receiver<KeyEv> 
     // Test switch: lets simulated key presses through so the path can be tested automatically.
     ALLOW_INJECTED.store(std::env::var_os("PCLONE_HOOK_INJECTED").is_some(), Relaxed);
     std::thread::spawn(|| unsafe {
+        HOOK_THREAD.store(windows::Win32::System::Threading::GetCurrentThreadId(), Relaxed);
         let module = GetModuleHandleW(None).unwrap_or_default();
-        if let Err(e) = SetWindowsHookExW(WH_KEYBOARD_LL, Some(proc), Some(module.into()), 0) {
-            return crate::plog!("keyboard hook failed: {e}");
-        }
+        let mut hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(proc), Some(module.into()), 0) {
+            Ok(h) => h,
+            Err(e) => return crate::plog!("keyboard hook failed: {e}"),
+        };
+        crate::plog!("keyboard: hook installed");
         let mut msg = MSG::default();
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {}
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            if msg.message == WM_APP_REHOOK {
+                // Windows silently drops a hook that was slow to answer once; put it back.
+                let _ = UnhookWindowsHookEx(hook);
+                match SetWindowsHookExW(WH_KEYBOARD_LL, Some(proc), Some(module.into()), 0) {
+                    Ok(h) => hook = h,
+                    Err(e) => crate::plog!("keyboard hook reinstall failed: {e}"),
+                }
+            }
+        }
     });
     rx
+}
+
+const WM_APP_REHOOK: u32 = WM_APP + 7;
+static HOOK_THREAD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static LAST_REHOOK: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// A key reached the window during a session, so the hook didn't catch it (Windows removed
+/// it, or something else is in the way): log it and reinstall the hook (at most every 3 s).
+pub fn missed_key() {
+    let mut last = LAST_REHOOK.lock().unwrap();
+    if last.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(3)) {
+        return;
+    }
+    *last = Some(std::time::Instant::now());
+    crate::plog!("keyboard: a key got past the hook during the session; reinstalling it");
+    let t = HOOK_THREAD.load(Relaxed);
+    if t != 0 {
+        unsafe {
+            let _ = PostThreadMessageW(t, WM_APP_REHOOK, WPARAM(0), LPARAM(0));
+        }
+    }
+}
+
+pub fn is_active() -> bool {
+    ACTIVE.load(Relaxed)
 }
 
 pub fn set_active(on: bool) {

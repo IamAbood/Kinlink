@@ -695,6 +695,9 @@ impl App {
                 if std::env::var_os("PCLONE_DEBUG").is_some() {
                     crate::plog!("WINDOW_KEY sc={sc:#x}");
                 }
+                if kbhook::is_active() {
+                    kbhook::missed_key(); // the hook should have taken it (Alt+Tab would go local)
+                }
                 self.on_key(KeyEv { scan: (sc & 0xFF) as u16, ext: sc & 0xE000 != 0, down: event.state == ElementState::Pressed });
             }
             return;
@@ -1906,7 +1909,14 @@ impl App {
                                 ui.set_width(ui.available_width());
                                 t::section(ui, &tr("Lock screen & admin prompts"));
                                 let (installed, running) = crate::syshelper::service_state();
-                                if installed {
+                                if installed && crate::syshelper::helper_is_stale() {
+                                    para(ui, &tl("The helper belongs to another copy of Kinlink (an old version or a moved file), so it won't work with this one."), 12.0, t::DANGER);
+                                    ui.horizontal(|ui| {
+                                        if t::primary(ui, &tr("Update helper (asks for admin)"), None, true).clicked() {
+                                            crate::syshelper::run_elevated("--install-service");
+                                        }
+                                    });
+                                } else if installed {
                                     ui.colored_label(if running { t::MINT_SOFT } else { t::DANGER }, if running { tr("Guests can control them") } else { tr("Helper installed but not running") });
                                     ui.horizontal(|ui| {
                                         if ui.button(tr("Turn off")).on_hover_text(tr("Removes the helper service (asks for admin)")).clicked() {
@@ -2221,6 +2231,10 @@ Updating the graphics driver usually fixes this.");
         listen_for_show(self.waker());
         crate::notify::register();
         settings::register_url_scheme();
+        // Start with Windows: keep the entry pointing at this copy (it may have moved or updated).
+        if self.autostart && settings::profile().is_none() {
+            settings::refresh_autostart();
+        }
         crate::hotkey::install(self.waker());
         match build_tray(self.waker()) {
             Some((t, rx)) => {

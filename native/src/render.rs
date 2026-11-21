@@ -9,6 +9,8 @@ const SHADER: &str = r#"
 @group(0) @binding(1) var tu: texture_2d<f32>;
 @group(0) @binding(2) var tv: texture_2d<f32>;
 @group(0) @binding(3) var smp: sampler;
+// Part of the picture to show: xy = top-left, zw = size (0..1). Whole picture = (0, 0, 1, 1).
+@group(0) @binding(4) var<uniform> view: vec4<f32>;
 struct VO { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
 @vertex fn vs(@builtin(vertex_index) i: u32) -> VO {
     var p = array<vec2<f32>, 3>(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
@@ -18,10 +20,11 @@ struct VO { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
     return o;
 }
 @fragment fn fs(v: VO) -> @location(0) vec4<f32> {
+    let uv = view.xy + v.uv * view.zw;
     // BT.601 limited range (matches both encoders)
-    let y = 1.164 * (textureSample(ty, smp, v.uv).r - 0.0627);
-    let u = textureSample(tu, smp, v.uv).r - 0.5;
-    let w = textureSample(tv, smp, v.uv).r - 0.5;
+    let y = 1.164 * (textureSample(ty, smp, uv).r - 0.0627);
+    let u = textureSample(tu, smp, uv).r - 0.5;
+    let w = textureSample(tv, smp, uv).r - 0.5;
     return vec4(y + 1.596 * w, y - 0.392 * u - 0.813 * w, y + 2.017 * u, 1.0);
 }
 "#;
@@ -44,6 +47,10 @@ pub struct Gfx {
     sampler: wgpu::Sampler,
     video: Option<VideoTex>,
     pub egui: egui_wgpu::Renderer,
+    view_buf: wgpu::Buffer,
+    /// Zoom (1 = whole picture) and the point (0..1) to keep centered when zoomed in.
+    pub zoom: f32,
+    pub focus: (f32, f32),
 }
 
 /// Backends to try, in order. Windows: DirectX 12 first (most dependable), then Vulkan.
@@ -144,6 +151,12 @@ impl Gfx {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
             ],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
@@ -170,7 +183,8 @@ impl Gfx {
             ..Default::default()
         });
         let egui = egui_wgpu::Renderer::new(&device, format, egui_wgpu::RendererOptions::default());
-        Ok(Self { window, surface, device, queue, config, pipeline, layout, sampler, video: None, egui })
+        let view_buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        Ok(Self { window, surface, device, queue, config, pipeline, layout, sampler, video: None, egui, view_buf, zoom: 1.0, focus: (0.5, 0.5) })
     }
 
     pub fn resize(&mut self, w: u32, h: u32) {
@@ -206,6 +220,7 @@ impl Gfx {
                     wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&views[1]) },
                     wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&views[2]) },
                     wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                    wgpu::BindGroupEntry { binding: 4, resource: self.view_buf.as_entire_binding() },
                 ],
             });
             self.video = Some(VideoTex { w, h, planes, bind });
@@ -234,7 +249,18 @@ impl Gfx {
         Some(((sw - w) / 2.0, (sh - h) / 2.0, w, h))
     }
 
+    /// The part of the picture on screen: (left, top, size), all 0..1 of the picture.
+    pub fn view_window(&self) -> (f32, f32, f32) {
+        let s = 1.0 / self.zoom.max(1.0);
+        let x = (self.focus.0 - s / 2.0).clamp(0.0, 1.0 - s);
+        let y = (self.focus.1 - s / 2.0).clamp(0.0, 1.0 - s);
+        (x, y, s)
+    }
+
     pub fn render(&mut self, show_video: bool, out: egui::FullOutput, ctx: &egui::Context) {
+        let (vx, vy, vs) = self.view_window();
+        let bytes: Vec<u8> = [vx, vy, vs, vs].iter().flat_map(|f| f.to_le_bytes()).collect();
+        self.queue.write_buffer(&self.view_buf, 0, &bytes);
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             _ => {

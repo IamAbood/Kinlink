@@ -15,14 +15,15 @@ use winit::application::ApplicationHandler;
 use winit::event::{ElementState, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::keyboard::{Key, NamedKey};
-use winit::platform::android::activity::AndroidApp;
+use winit::platform::android::activity::{AndroidApp, WindowManagerFlags};
 use winit::window::{Window, WindowId};
 
 /// Trackpad speed: fraction of the PC screen per phone-screen width swiped.
 const SPEED: f32 = 1.4;
-const TAP: Duration = Duration::from_millis(250);
+const TAP: Duration = Duration::from_millis(320);
 const HOLD: Duration = Duration::from_millis(450);
-const SLOP: f32 = 12.0; // px a finger may wobble and still count as a tap
+/// How far (in dp, scaled to the screen) a finger may wobble and still count as a tap.
+const SLOP_DP: f32 = 14.0;
 
 struct Outgoing {
     to: Pub,
@@ -35,6 +36,10 @@ struct Outgoing {
 /// One gesture on the trackpad, from first finger down to last finger up.
 #[derive(Default)]
 struct Gesture {
+    /// Two-finger pinch: zooming instead of scrolling; finger distance and zoom when it began.
+    pinch: bool,
+    dist0: f32,
+    zoom0: f32,
     fingers: HashMap<u64, (f32, f32)>,
     max_fingers: usize,
     start: Option<Instant>,
@@ -65,6 +70,8 @@ pub struct App {
     /// A newer release tag found on GitHub.
     update: Arc<Mutex<Option<String>>>,
     cursor: (f32, f32),
+    /// Pinch zoom (1 = whole screen); the view follows the cursor when zoomed in.
+    zoom: f32,
     g: Gesture,
 }
 
@@ -90,6 +97,7 @@ impl App {
             pad: Default::default(),
             update: Arc::new(Mutex::new(None)),
             cursor: (0.5, 0.5),
+            zoom: 1.0,
             g: Gesture::default(),
         };
         crate::theme::apply(&app.ctx);
@@ -164,6 +172,8 @@ impl App {
     }
 
     fn disconnect(&mut self, why: Option<String>) {
+        self.android.set_window_flags(WindowManagerFlags::empty(), WindowManagerFlags::FULLSCREEN | WindowManagerFlags::KEEP_SCREEN_ON);
+        self.zoom = 1.0;
         self.pad_mode = false;
         self.pad.release();
         if let Some(c) = self.client.take() {
@@ -198,6 +208,9 @@ impl App {
                         let c = Client::start(sock, addrs, cipher, o.name, self.waker());
                         c.set_quality(720, 10); // phone screen + mobile data friendly
                         self.cursor = (0.5, 0.5);
+                        self.zoom = 1.0;
+                        // Full screen (no status bar to pull down by accident) and keep the screen on.
+                        self.android.set_window_flags(WindowManagerFlags::FULLSCREEN | WindowManagerFlags::KEEP_SCREEN_ON, WindowManagerFlags::empty());
                         self.client = Some(c);
                     }
                     Sig::ConnectNo { req, reason } if req == o.req => {
@@ -234,6 +247,8 @@ impl App {
 
     fn touch(&mut self, id: u64, phase: TouchPhase, x: f32, y: f32) {
         let width = self.gfx.as_ref().and_then(|g| g.video_rect()).map(|r| r.2).unwrap_or(1000.0).max(100.0);
+        let slop = SLOP_DP * self.ctx.pixels_per_point();
+        let mut out: Vec<Input> = Vec::new();
         let g = &mut self.g;
         match phase {
             TouchPhase::Started => {
@@ -242,6 +257,11 @@ impl App {
                 }
                 g.fingers.insert(id, (x, y));
                 g.max_fingers = g.max_fingers.max(g.fingers.len());
+                if g.fingers.len() == 2 {
+                    let p: Vec<(f32, f32)> = g.fingers.values().copied().collect();
+                    g.dist0 = ((p[0].0 - p[1].0).powi(2) + (p[0].1 - p[1].1).powi(2)).sqrt().max(1.0);
+                    g.zoom0 = self.zoom;
+                }
             }
             TouchPhase::Moved => {
                 let Some(&(px, py)) = g.fingers.get(&id) else { return };
@@ -250,24 +270,32 @@ impl App {
                 g.travel += dx.abs() + dy.abs();
                 let held = g.start.is_some_and(|s| s.elapsed() > HOLD);
                 match g.fingers.len() {
-                    1 => {
+                    1 if !g.pinch => {
                         // Hold still, then move = drag (select text, move windows).
-                        if held && !g.dragging && g.travel < SLOP * 2.0 && g.max_fingers == 1 {
+                        if held && !g.dragging && g.travel < slop * 2.0 && g.max_fingers == 1 {
                             g.dragging = true;
-                            self.send(Input::Button { b: 0, down: true });
+                            out.push(Input::Button { b: 0, down: true });
                         }
-                        let k = SPEED / width;
+                        // Zoomed in: finer movement.
+                        let k = SPEED / width / self.zoom;
                         self.cursor.0 = (self.cursor.0 + dx * k).clamp(0.0, 1.0);
                         self.cursor.1 = (self.cursor.1 + dy * k * 16.0 / 9.0).clamp(0.0, 1.0);
-                        self.send(Input::MouseAbs { x: self.cursor.0, y: self.cursor.1 });
+                        out.push(Input::MouseAbs { x: self.cursor.0, y: self.cursor.1 });
                     }
                     2 => {
-                        // Two-finger scroll (each finger reports, so halve it).
-                        g.wheel += dy * 0.5 * 3.0;
-                        let notches = g.wheel as i32;
-                        if notches != 0 {
-                            g.wheel -= notches as f32;
-                            self.send(Input::Wheel { dx: 0, dy: notches });
+                        let p: Vec<(f32, f32)> = g.fingers.values().copied().collect();
+                        let d = ((p[0].0 - p[1].0).powi(2) + (p[0].1 - p[1].1).powi(2)).sqrt();
+                        // Fingers moving apart/together = zoom; moving together = scroll.
+                        if g.pinch || (d / g.dist0 - 1.0).abs() > 0.15 {
+                            g.pinch = true;
+                            self.zoom = (g.zoom0 * d / g.dist0).clamp(1.0, 4.0);
+                        } else {
+                            g.wheel += dy * 0.5 * 3.0 / self.ctx.pixels_per_point();
+                            let notches = g.wheel as i32;
+                            if notches != 0 {
+                                g.wheel -= notches as f32;
+                                out.push(Input::Wheel { dx: 0, dy: notches });
+                            }
                         }
                     }
                     _ => {}
@@ -275,21 +303,27 @@ impl App {
             }
             TouchPhase::Ended | TouchPhase::Cancelled => {
                 g.fingers.remove(&id);
-                if !g.fingers.is_empty() {
-                    return;
-                }
-                let quick = g.start.is_some_and(|s| s.elapsed() < TAP);
-                if g.dragging {
-                    self.send(Input::Button { b: 0, down: false });
-                } else if quick && g.travel < SLOP && phase == TouchPhase::Ended {
-                    match g.max_fingers {
-                        1 => self.click(0),
-                        2 => self.click(1),
-                        _ => self.click(2),
+                if g.fingers.is_empty() {
+                    let quick = g.start.is_some_and(|s| s.elapsed() < TAP);
+                    if g.dragging {
+                        out.push(Input::Button { b: 0, down: false });
+                    } else if quick && !g.pinch && g.travel < slop * g.max_fingers as f32 && phase == TouchPhase::Ended {
+                        // Click where our cursor is (the PC's mouse may be somewhere else).
+                        out.push(Input::MouseAbs { x: self.cursor.0, y: self.cursor.1 });
+                        let b = match g.max_fingers {
+                            1 => 0,
+                            2 => 1,
+                            _ => 2,
+                        };
+                        out.push(Input::Button { b, down: true });
+                        out.push(Input::Button { b, down: false });
                     }
+                    self.g = Gesture::default();
                 }
-                self.g = Gesture::default();
             }
+        }
+        for i in out {
+            self.send(i);
         }
     }
 
@@ -571,13 +605,42 @@ or have permission to use."), 11.5, t::MUTED);
             let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("pad")));
             self.pad.draw(&painter, ctx.content_rect());
         }
-        // Remote cursor where the trackpad puts it.
+        // Zoomed in: keep the cursor in view.
+        if let Some(g) = &mut self.gfx {
+            g.zoom = self.zoom;
+            g.focus = self.cursor;
+        }
+        // Remote cursor where the trackpad puts it (through the zoom window).
         if let (false, State::Connected { .. }, Some((x, y, w, h))) = (self.pad_mode, &state, self.gfx.as_ref().and_then(|g| g.video_rect())) {
             let ppp = ctx.pixels_per_point();
-            let p = egui::pos2((x + self.cursor.0 * w) / ppp, (y + self.cursor.1 * h) / ppp);
+            let (ox, oy, vs) = self.gfx.as_ref().map(|g| g.view_window()).unwrap_or((0.0, 0.0, 1.0));
+            let (cx, cy) = ((self.cursor.0 - ox) / vs, (self.cursor.1 - oy) / vs);
+            let p = egui::pos2((x + cx * w) / ppp, (y + cy * h) / ppp);
             let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("cursor")));
             let tip = [p, p + egui::vec2(0.0, 18.0), p + egui::vec2(5.0, 14.0), p + egui::vec2(12.0, 13.0)];
             painter.add(egui::Shape::convex_polygon(tip.to_vec(), egui::Color32::WHITE, egui::Stroke::new(1.5, egui::Color32::BLACK)));
+        }
+        if let State::Connected { mouse, keyboard, .. } = &state {
+            if !*mouse || !*keyboard {
+                let what = match (*mouse, *keyboard) {
+                    (false, false) => tl("Mouse and keyboard are turned off for you on that PC. Ask its owner to allow them in Friends."),
+                    (false, true) => tl("Mouse is turned off for you on that PC. Ask its owner to allow it in Friends."),
+                    _ => tl("Keyboard is turned off for you on that PC. Ask its owner to allow it in Friends."),
+                };
+                egui::Area::new(egui::Id::new("perm_note")).anchor(egui::Align2::CENTER_BOTTOM, [0.0, -16.0]).show(ctx, |ui| {
+                    egui::Frame::NONE.fill(egui::Color32::from_rgba_unmultiplied(58, 20, 38, 235)).corner_radius(12.0).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+                        ui.set_max_width(320.0);
+                        t::para(ui, &what, 12.5, t::DANGER);
+                    });
+                });
+            }
+        }
+        if self.zoom > 1.01 && !self.pad_mode {
+            egui::Area::new(egui::Id::new("zoom_note")).anchor(egui::Align2::RIGHT_TOP, [-14.0, 30.0]).show(ctx, |ui| {
+                egui::Frame::NONE.fill(egui::Color32::from_black_alpha(150)).corner_radius(10.0).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
+                    ui.label(RichText::new(format!("{:.1}×", self.zoom)).size(12.0).color(egui::Color32::WHITE));
+                });
+            });
         }
         if matches!(state, State::Connecting) {
             egui::Area::new(egui::Id::new("connecting")).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
@@ -590,7 +653,7 @@ or have permission to use."), 11.5, t::MUTED);
             });
         }
         let mut act: Option<&str> = None;
-        egui::Area::new(egui::Id::new("menu")).anchor(egui::Align2::CENTER_TOP, [0.0, 8.0]).show(ctx, |ui| {
+        egui::Area::new(egui::Id::new("menu")).anchor(egui::Align2::CENTER_TOP, [0.0, 30.0]).show(ctx, |ui| {
             if !self.menu {
                 let (rect, resp) = ui.allocate_exact_size(egui::vec2(52.0, 36.0), egui::Sense::click());
                 let p = ui.painter();

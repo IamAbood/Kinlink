@@ -84,6 +84,24 @@ impl Settings {
 const RUN_KEY: windows::core::PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const RUN_NAME: windows::core::PCWSTR = w!("ParsecCloneNative");
 
+/// Keeps "Start with Windows" pointing at this copy of the app (it may have been moved,
+/// renamed or updated) and switched on in Task Manager > Startup apps.
+pub fn refresh_autostart() {
+    set_autostart(true);
+    // Task Manager's on/off switch lives here; 02 00.. = enabled.
+    let enabled: [u8; 12] = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    unsafe {
+        let _ = RegSetKeyValueW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run"),
+            RUN_NAME,
+            windows::Win32::System::Registry::REG_BINARY.0,
+            Some(enabled.as_ptr() as _),
+            enabled.len() as u32,
+        );
+    }
+}
+
 pub fn autostart_enabled() -> bool {
     unsafe { RegGetValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_NAME, RRF_RT_REG_SZ, None, None, None).is_ok() }
 }

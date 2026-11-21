@@ -282,6 +282,11 @@ pub fn get(en: &str) -> Option<&'static str> {
         "Copied {} file(s) from {}: paste with Ctrl+V" => "تم نسخ {} ملف من {}: الصقها بـ Ctrl+V",
         "Couldn't put it on the clipboard: {}" => "تعذر وضعه في الحافظة: {}",
         "Trackpad" => "لوحة اللمس",
+        "The helper belongs to another copy of Kinlink (an old version or a moved file), so it won't work with this one." => "المساعد تابع لنسخة أخرى من Kinlink (إصدار قديم أو ملف منقول)، لذلك لن يعمل مع هذه النسخة.",
+        "Update helper (asks for admin)" => "تحديث المساعد (يطلب صلاحية المسؤول)",
+        "Mouse and keyboard are turned off for you on that PC. Ask its owner to allow them in Friends." => "الماوس ولوحة المفاتيح مغلقان لك على ذلك الجهاز. اطلب من صاحبه السماح بهما من الأصدقاء.",
+        "Mouse is turned off for you on that PC. Ask its owner to allow it in Friends." => "الماوس مغلق لك على ذلك الجهاز. اطلب من صاحبه السماح به من الأصدقاء.",
+        "Keyboard is turned off for you on that PC. Ask its owner to allow it in Friends." => "لوحة المفاتيح مغلقة لك على ذلك الجهاز. اطلب من صاحبه السماح بها من الأصدقاء.",
         _ => return None,
     })
 }

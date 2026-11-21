@@ -45,6 +45,8 @@ pub struct TouchPad {
 
 /// Where everything goes on a screen of this size (points).
 fn layout(s: Rect) -> Vec<Shape> {
+    // Stay clear of the edges: Android uses edge swipes for back / notifications.
+    let s = s.shrink2(vec2(s.width() * 0.06, s.height() * 0.10));
     let (w, h, o) = (s.width(), s.height(), s.min);
     let u = h.min(w) * 0.1; // unit: 10% of the short side
     let at = |x: f32, y: f32| pos2(o.x + x * w, o.y + y * h);

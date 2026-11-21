@@ -135,6 +135,22 @@ pub fn service_state() -> (bool, bool) {
     }
 }
 
+/// The exe the installed helper service runs (it only serves that exact program).
+pub fn service_exe() -> Option<std::path::PathBuf> {
+    use windows_service::service::ServiceAccess;
+    use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
+    let m = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT).ok()?;
+    let s = m.open_service(SERVICE, ServiceAccess::QUERY_CONFIG).ok()?;
+    Some(s.query_config().ok()?.executable_path)
+}
+
+/// The helper is installed for a different copy of the app (moved, renamed or an old version).
+pub fn helper_is_stale() -> bool {
+    let (Some(svc), Ok(me)) = (service_exe(), std::env::current_exe()) else { return false };
+    let norm = |p: &std::path::Path| p.to_string_lossy().trim_matches('"').to_lowercase();
+    norm(&svc) != norm(&me)
+}
+
 /// Runs `--install-service` / `--uninstall-service` elevated (UAC prompt).
 pub fn run_elevated(arg: &str) {
     use windows::Win32::UI::Shell::ShellExecuteW;
