@@ -85,4 +85,4 @@ Options: `--minimized`, `--connect-friend name#1234`, `--profile <name>` (separa
 
 ## License
 
-MIT, see [LICENSE](LICENSE). How Windows builds are made and signed: [CODE_SIGNING.md](CODE_SIGNING.md).
+MIT, see [LICENSE](LICENSE). Using the app means agreeing to the [Terms of Use](TERMS.md) and [Privacy Policy](PRIVACY.md): only connect to computers you own or have permission to use. How Windows builds are made and signed: [CODE_SIGNING.md](CODE_SIGNING.md).

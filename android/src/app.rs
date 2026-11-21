@@ -396,7 +396,11 @@ impl App {
                 if let Some(m) = &self.message {
                     ui.colored_label(t::DANGER, m);
                 }
-                ui.add_space(24.0);
+                ui.add_space(16.0);
+                ui.label(RichText::new("By continuing you agree to the Terms of Use and Privacy Policy
+(github.com/IamAbood/Kinlink). Only connect to PCs you own
+or have permission to use.").size(11.5).color(t::MUTED));
+                ui.add_space(8.0);
                 ui.label(RichText::new("Made by Abdulkareem Alsaou").size(12.0).color(t::MUTED));
             });
         });

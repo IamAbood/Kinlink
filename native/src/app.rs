@@ -709,7 +709,7 @@ impl App {
                 t::logo(ui.painter(), r, true);
                 ui.add_space(10.0);
                 ui.label(RichText::new("Welcome to Kinlink").font(egui::FontId::new(28.0, t::bold())));
-                ui.label(RichText::new("Pick a username. Friends add you with it, plus a 4-digit tag\nonly your PC can own. No account, no password.").color(t::SOFT));
+                ui.label(RichText::new("Pick a username. Friends add you with it, plus a tag\nonly your PC can own. No account, no password.").color(t::SOFT));
                 ui.add_space(14.0);
                 let r = ui.add(egui::TextEdit::singleline(&mut self.setup_name).hint_text("username").desired_width(300.0).margin(egui::vec2(14.0, 11.0)).font(egui::FontId::new(16.0, t::bold())));
                 if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -723,7 +723,21 @@ impl App {
                 if let Some(e) = &self.setup_err {
                     ui.colored_label(t::DANGER, e);
                 }
-                ui.add_space(30.0);
+                ui.add_space(14.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    let w = 330.0;
+                    ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
+                    ui.label(RichText::new("By continuing you agree to the").size(12.0).color(t::MUTED));
+                    if ui.link(RichText::new("Terms of Use").size(12.0)).clicked() {
+                        open_url("https://github.com/IamAbood/Kinlink/blob/main/TERMS.md");
+                    }
+                    ui.label(RichText::new("and").size(12.0).color(t::MUTED));
+                    if ui.link(RichText::new("Privacy Policy").size(12.0)).clicked() {
+                        open_url("https://github.com/IamAbood/Kinlink/blob/main/PRIVACY.md");
+                    }
+                });
+                ui.add_space(16.0);
                 ui.label(RichText::new("Made by Abdulkareem Alsaou").size(12.0).color(t::MUTED));
             });
         });
@@ -1689,6 +1703,15 @@ impl App {
                                         }
                                     }
                                 });
+                                ui.horizontal(|ui| {
+                                    if ui.button("Terms of Use").clicked() {
+                                        open_url("https://github.com/IamAbood/Kinlink/blob/main/TERMS.md");
+                                    }
+                                    if ui.button("Privacy Policy").clicked() {
+                                        open_url("https://github.com/IamAbood/Kinlink/blob/main/PRIVACY.md");
+                                    }
+                                });
+                                ui.label(RichText::new("Only connect to PCs you own or have permission to use.").size(11.5).color(t::SOFT));
                                 ui.label(RichText::new(format!("Kinlink {} · made by Abdulkareem Alsaou", crate::updater::current())).size(11.5).color(t::MUTED));
                             });
                         });
@@ -2218,4 +2241,9 @@ fn open_folder(dir: Option<std::path::PathBuf>) {
         let _ = std::fs::create_dir_all(&d);
         let _ = std::process::Command::new("explorer").arg(d).spawn();
     }
+}
+
+/// Opens a web page in the default browser.
+fn open_url(url: &str) {
+    let _ = std::process::Command::new("explorer").arg(url).spawn();
 }
