@@ -183,10 +183,8 @@ pub struct App {
     qual_idx: usize,
     /// Sharp-text mode: 30 fps with more detail per frame (for reading/office work).
     sharp: bool,
-    /// Session tool windows: the host's games, and a terminal on the host.
+    /// Session tool window: the host's games.
     games_open: bool,
-    term_open: bool,
-    term_input: String,
     volume: u32,
     muted: bool,
     autostart: bool,
@@ -269,8 +267,6 @@ impl App {
             qual_idx: 3,
             sharp: false,
             games_open: false,
-            term_open: false,
-            term_input: String::new(),
             volume: 100,
             muted: false,
             autostart: settings::autostart_enabled(),
@@ -1237,26 +1233,6 @@ impl App {
             });
             self.games_open = open;
         }
-        if self.term_open {
-            let text = c.shell_text();
-            let mut open = true;
-            let mut run = None;
-            egui::Window::new(tr("Terminal on that PC")).open(&mut open).default_size([560.0, 360.0]).show(ctx, |ui| {
-                egui::ScrollArea::vertical().max_height(ui.available_height() - 40.0).stick_to_bottom(true).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.label(RichText::new(if text.is_empty() { tl("Type a command (cmd.exe) and press Enter. Each line runs on its own, 30 s max.") } else { text }).monospace().size(12.0));
-                });
-                let r = ui.add(egui::TextEdit::singleline(&mut self.term_input).font(egui::TextStyle::Monospace).desired_width(f32::INFINITY).hint_text("dir, ipconfig, tasklist…"));
-                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !self.term_input.trim().is_empty() {
-                    run = Some(std::mem::take(&mut self.term_input));
-                    r.request_focus();
-                }
-            });
-            if let Some(line) = run {
-                c.run_shell(line.trim());
-            }
-            self.term_open = open;
-        }
     }
 
     fn overlay_ui(&mut self, ctx: &egui::Context) {
@@ -1366,9 +1342,6 @@ impl App {
                         if self.games_open {
                             c.list_games();
                         }
-                    }
-                    if t::tile(ui, Icon::Keyboard, &tr("Terminal"), self.term_open.then_some(t::ACCENT_SOFT()), w).on_hover_text(tr("Run commands on that PC")).clicked() {
-                        self.term_open = !self.term_open;
                     }
                 });
                 // stream settings

@@ -55,7 +55,8 @@ pub enum Msg {
     ListGames,
     Games(Vec<String>),
     LaunchGame(String),
-    /// Guest terminal: one command line; output comes back as ShellOut pieces.
+    /// Retired: the guest terminal was removed. Kept only so later messages keep their numbers;
+    /// hosts never run anything a guest sends.
     Shell(String),
     ShellOut(String),
     /// A short note for the guest ("Starting Dota 2…").

@@ -1,5 +1,4 @@
-//! Installed games on this PC (Steam and Epic), so a guest can start one from the session menu,
-//! and a tiny command runner for the guest's terminal window.
+//! Installed games on this PC (Steam and Epic), so a guest can start one from the session menu.
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -82,41 +81,6 @@ pub fn launch(name: &str) -> Result<(), String> {
     std::process::Command::new("explorer.exe").arg(url).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
-/// Runs one command line in cmd.exe (no window), at most 30 s; returns its output.
-pub fn run_command(line: &str) -> String {
-    use std::os::windows::process::CommandExt;
-    use std::process::{Command, Stdio};
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let child = Command::new("cmd.exe").arg("/C").raw_arg(line).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).creation_flags(CREATE_NO_WINDOW).spawn();
-    let mut child = match child {
-        Ok(c) => c,
-        Err(e) => return format!("Couldn't run it: {e}"),
-    };
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if start.elapsed() > Duration::from_secs(30) => {
-                let _ = child.kill();
-                break;
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(e) => return e.to_string(),
-        }
-    }
-    let out = child.wait_with_output().map(|o| [o.stdout, o.stderr].concat()).unwrap_or_default();
-    // cmd.exe prints in the console code page; most of it is ASCII anyway.
-    let mut s = String::from_utf8_lossy(&out).to_string();
-    if start.elapsed() > Duration::from_secs(30) {
-        s.push_str("\n(stopped after 30 seconds)");
-    }
-    if s.len() > 20_000 {
-        s.truncate(20_000);
-        s.push_str("\n(cut off)");
-    }
-    s
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -125,6 +89,5 @@ mod tests {
         assert_eq!(super::vdf_values(t, "appid"), vec!["570"]);
         assert_eq!(super::vdf_values(t, "name"), vec!["Dota 2"]);
         assert_eq!(super::vdf_values(t, "path"), vec!["D:\\Games\\Steam"]);
-        assert!(super::run_command("echo kinlink").contains("kinlink"));
     }
 }

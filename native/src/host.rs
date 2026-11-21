@@ -736,21 +736,8 @@ fn on_packet(sh: &Arc<Shared>, idx: usize, from: SocketAddr, pkt: &[u8]) {
             };
             reply(&Msg::Info(text));
         }
-        Msg::Shell(line) => {
-            if !perms.keyboard {
-                reply(&Msg::ShellOut("Not allowed: the host hasn't given you keyboard control.\n".into()));
-            } else {
-                crate::plog!("host: guest ran a command");
-                let (sh2, cipher2) = (sh.clone(), cipher.clone());
-                thread::spawn(move || {
-                    let text = crate::games::run_command(&line);
-                    for p in proto::pieces(&format!("{text}\n"), 900) {
-                        let _ = sh2.socks[idx].send_to(&cipher2.seal(&encode(&Msg::ShellOut(p))), from);
-                        thread::sleep(Duration::from_millis(2));
-                    }
-                });
-            }
-        }
+        // The guest terminal was removed on purpose (security): never run a guest's commands.
+        Msg::Shell(_) => {}
         Msg::SetSharp(on) => {
             if let Some(s) = sh.sessions.lock().unwrap().iter_mut().find(|s| s.id == sid) {
                 s.sharp = on;
