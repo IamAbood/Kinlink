@@ -1744,6 +1744,17 @@ impl App {
                                     }
                                     ui.label(RichText::new(tr("One use, valid for 1 hour")).size(11.5).color(t::MUTED));
                                 });
+                                ui.horizontal(|ui| {
+                                    let host = self.host.as_ref().map(|h| h.handle());
+                                    if ui.add_enabled(host.is_some(), egui::Button::new(tr("Browser link"))).on_hover_text(tr("For someone without Kinlink: they open it in Chrome, Edge, Firefox or Safari. Mouse and keyboard only.")).clicked() {
+                                        if let Some(h) = host {
+                                            let link = h.web_link(self.invite_perms);
+                                            ui.ctx().copy_text(link);
+                                            self.toast(tl("Browser link copied. Anyone who opens it can join once, within 1 hour."));
+                                        }
+                                    }
+                                    ui.label(RichText::new(tr("No install needed")).size(11.5).color(t::MUTED));
+                                });
                                 for inv in sig.invites() {
                                     let mins = inv.expires.saturating_duration_since(Instant::now()).as_secs() / 60 + 1;
                                     let what: Vec<String> = [(inv.mouse, "mouse"), (inv.keyboard, "keyboard"), (inv.gamepad, "controller")].iter().filter(|x| x.0).map(|x| tl(x.1)).collect();

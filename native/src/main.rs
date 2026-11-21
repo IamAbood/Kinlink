@@ -35,6 +35,7 @@ mod stun;
 mod theme;
 mod syshelper;
 mod updater;
+mod web;
 
 use std::time::{Duration, Instant};
 
@@ -116,6 +117,21 @@ fn main() {
     }
     if args.iter().any(|a| a == "--padtest") {
         std::process::exit(padtest());
+    }
+    if args.iter().any(|a| a == "--webtest") {
+        // View-only host + a browser link; prints who's connected for 3 minutes.
+        let cfg = host::HostConfig { name: "host".into(), port: 47896, max_mbps: 8, fps: 30, hardware: true, upnp: false };
+        let h = host::Host::start(cfg).unwrap();
+        let link = h.handle().web_link(host::Perms { mouse: false, keyboard: false, gamepad: false });
+        let local = link.replacen(crate::web::PAGE, "http://localhost:8765/", 1);
+        println!("LINK {link}
+LOCAL {local}");
+        for _ in 0..90 {
+            std::thread::sleep(Duration::from_secs(2));
+            let st = h.status();
+            println!("clients {:?} | {} | {}", st.clients, st.encoder, st.stats);
+        }
+        std::process::exit(0);
     }
     if args.iter().any(|a| a == "--signaltest") {
         std::process::exit(signaltest());

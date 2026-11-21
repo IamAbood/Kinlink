@@ -302,6 +302,11 @@ pub fn get(en: &str) -> Option<&'static str> {
         "Make a button on your controller act as another one (for games you play through Kinlink)." => "اجعل زرًا في وحدة التحكم يعمل كزر آخر (للألعاب التي تلعبها عبر Kinlink).",
         "Remap buttons" => "تغيير الأزرار",
         "Reset" => "إعادة الضبط",
+        "Browser link" => "رابط للمتصفح",
+        "For someone without Kinlink: they open it in Chrome, Edge, Firefox or Safari. Mouse and keyboard only." => "لمن لا يملك Kinlink: يفتحه في Chrome أو Edge أو Firefox أو Safari. الماوس ولوحة المفاتيح فقط.",
+        "Browser link copied. Anyone who opens it can join once, within 1 hour." => "تم نسخ رابط المتصفح. يمكن لمن يفتحه الانضمام مرة واحدة خلال ساعة.",
+        "No install needed" => "بدون تثبيت",
+        "{} joined from a browser" => "انضم {} من المتصفح",
         _ => return None,
     })
 }

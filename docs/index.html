@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Kinlink</title>
+<meta name="description" content="Join a Kinlink PC from your browser.">
+<meta name="referrer" content="no-referrer">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;800&display=swap">
+<style>
+  :root {
+    --bg: #0B1020; --card: #121A30; --field: #18213B; --line: #26304F;
+    --text: #E9ECF8; --soft: #A9B1CF; --muted: #6F789A;
+    --accent: #7C6CFF; --mint: #3DDC97; --danger: #FF7A96;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 500 15px/1.5 Manrope, system-ui, sans-serif; }
+  main { min-height: 100%; display: grid; place-items: center; padding: 24px 16px; }
+  .card { width: 100%; max-width: 380px; background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 28px 24px; text-align: center; }
+  .logo { width: 64px; height: 64px; margin: 0 auto 14px; display: block; }
+  h1 { font-weight: 800; font-size: 26px; margin: 0 0 4px; }
+  p { color: var(--soft); margin: 0 0 18px; }
+  input { width: 100%; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--field); color: var(--text); font: inherit; outline: none; }
+  input:focus { border-color: var(--accent); }
+  button { font: inherit; font-weight: 800; border: 0; border-radius: 12px; padding: 12px 18px; cursor: pointer; }
+  .primary { width: 100%; margin-top: 12px; background: var(--accent); color: #fff; }
+  .primary:disabled { opacity: .55; cursor: default; }
+  #status { min-height: 22px; margin-top: 14px; font-size: 14px; color: var(--soft); }
+  #status.err { color: var(--danger); }
+  .fine { margin-top: 18px; font-size: 12px; color: var(--muted); }
+  .fine a { color: var(--soft); }
+  #stage { position: fixed; inset: 0; background: #000; display: none; touch-action: none; }
+  #stage.on { display: block; }
+  video { width: 100%; height: 100%; object-fit: contain; display: block; cursor: default; }
+  #bar { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; padding: 6px; background: rgba(18,26,48,.85); border: 1px solid var(--line); border-radius: 14px; opacity: .25; transition: opacity .2s; z-index: 2; }
+  #bar:hover, #bar:focus-within { opacity: 1; }
+  #bar button { padding: 8px 12px; background: var(--field); color: var(--text); font-weight: 500; font-size: 13px; }
+  #bar .leave { color: var(--danger); }
+  #note { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); padding: 8px 14px; border-radius: 10px; background: rgba(18,26,48,.9); color: var(--soft); font-size: 13px; z-index: 2; display: none; }
+</style>
+</head>
+<body>
+<main id="join">
+  <div class="card">
+    <svg class="logo" viewBox="0 0 64 64" aria-hidden="true">
+      <rect width="64" height="64" rx="16" fill="#18213B"/>
+      <circle cx="26" cy="32" r="12" fill="none" stroke="#7C6CFF" stroke-width="5"/>
+      <circle cx="38" cy="32" r="12" fill="none" stroke="#3DDC97" stroke-width="5"/>
+    </svg>
+    <h1>Kinlink</h1>
+    <p id="lead">Join a PC from your browser. Nothing to install.</p>
+    <form id="form">
+      <input id="name" maxlength="24" placeholder="Your name" autocomplete="nickname" required>
+      <button class="primary" id="go" type="submit">Join</button>
+    </form>
+    <div id="status" role="status"></div>
+    <div class="fine">The connection is direct and encrypted. Only join PCs you're allowed to use.<br>
+      <a href="https://github.com/IamAbood/Kinlink">Kinlink</a> · Made by Abdulkareem Alsaou</div>
+  </div>
+</main>
+<div id="stage">
+  <video id="video" autoplay playsinline muted></video>
+  <div id="bar">
+    <button id="fs" type="button">Fullscreen</button>
+    <button id="leave" class="leave" type="button">Leave</button>
+  </div>
+  <div id="note"></div>
+</div>
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const BROKERS = ["wss://broker.emqx.io:8084/mqtt", "wss://broker.hivemq.com:8884/mqtt"];
+const enc = new TextEncoder(), dec = new TextDecoder();
+
+function status(msg, err) { $("status").textContent = msg; $("status").className = err ? "err" : ""; }
+function note(msg) { const n = $("note"); n.textContent = msg; n.style.display = msg ? "block" : "none"; }
+
+// The secret is after '#': browsers never send that part to any server.
+const secretHex = location.hash.slice(1).toLowerCase();
+const secret = /^[0-9a-f]{32}$/.test(secretHex) ? Uint8Array.from(secretHex.match(/../g), (h) => parseInt(h, 16)) : null;
+if (!secret) {
+  $("lead").textContent = "Open the full link you were sent. It ends with a long code after #.";
+  $("form").style.display = "none";
+}
+try { $("name").value = localStorage.getItem("kinlink-name") || ""; } catch (e) {}
+
+async function sha256(label, data) {
+  const b = new Uint8Array(label.length + data.length);
+  b.set(enc.encode(label)); b.set(data, label.length);
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", b));
+}
+const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+let key, topic;
+async function derive() {
+  topic = "kinlink/web/" + hex(await sha256("kinlink-web-topic", secret)).slice(0, 32);
+  key = await crypto.subtle.importKey("raw", await sha256("kinlink-web-key", secret), "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+async function seal(obj) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(JSON.stringify(obj))));
+  const out = new Uint8Array(12 + ct.length); out.set(iv); out.set(ct, 12);
+  return out;
+}
+async function open(b) {
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b.slice(0, 12) }, key, b.slice(12));
+  return JSON.parse(dec.decode(pt));
+}
+
+function connectBroker() {
+  // First broker that answers.
+  return new Promise((resolve, reject) => {
+    let left = BROKERS.length, done = false;
+    for (const url of BROKERS) {
+      const c = mqtt.connect(url, { connectTimeout: 8000, reconnectPeriod: 0, clean: true });
+      c.on("connect", () => { if (done) { c.end(true); return; } done = true; resolve(c); });
+      c.on("error", () => { c.end(true); if (--left === 0 && !done) reject(new Error("Can't reach the signaling servers. Check your internet.")); });
+    }
+  });
+}
+
+let pc, dc, mq;
+async function join(name) {
+  status("Connecting…");
+  await derive();
+  mq = await connectBroker();
+  const id = hex(crypto.getRandomValues(new Uint8Array(8)));
+  pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"] }] });
+  const tr = pc.addTransceiver("video", { direction: "recvonly" });
+  const h264 = (RTCRtpReceiver.getCapabilities("video")?.codecs || []).filter((c) => c.mimeType.toLowerCase() === "video/h264");
+  if (h264.length && tr.setCodecPreferences) tr.setCodecPreferences(h264);
+  dc = pc.createDataChannel("input", { ordered: true });
+  pc.ontrack = (e) => {
+    try { e.receiver.playoutDelayHint = 0; e.receiver.jitterBufferTarget = 0; } catch (x) {}
+    $("video").srcObject = e.streams[0] || new MediaStream([e.track]);
+  };
+  pc.onconnectionstatechange = () => {
+    const s = pc.connectionState;
+    if (s === "connected") { $("join").style.display = "none"; $("stage").classList.add("on"); note(""); mq.end(true); }
+    if (s === "failed" || s === "closed" || s === "disconnected") leave(s === "failed" ? "Couldn't reach that PC directly (network blocks it)." : "The session ended.");
+  };
+  await pc.setLocalDescription(await pc.createOffer());
+  // Send the offer with all our addresses in it (no trickle): wait for gathering, max 3 s.
+  await new Promise((r) => { if (pc.iceGatheringState === "complete") r(); pc.onicegatheringstatechange = () => pc.iceGatheringState === "complete" && r(); setTimeout(r, 3000); });
+  const answered = new Promise((resolve, reject) => {
+    mq.on("message", async (t, payload) => {
+      try {
+        const m = await open(new Uint8Array(payload));
+        if (m.id !== id) return;
+        if (m.error) reject(new Error(m.error)); else resolve(m.answer);
+      } catch (e) {}
+    });
+    setTimeout(() => reject(new Error("That PC didn't answer. Is Kinlink running there, and is the link still valid?")), 25000);
+  });
+  await new Promise((r) => mq.subscribe(topic + "/h", { qos: 1 }, r));
+  const offer = await seal({ id, name, offer: pc.localDescription.toJSON() });
+  const send = () => mq.publish(topic + "/b", offer, { qos: 1 });
+  send();
+  const again = setInterval(send, 4000); // the PC ignores repeats
+  status("Waiting for the PC…");
+  let answer;
+  try { answer = await answered; } finally { clearInterval(again); }
+  await pc.setRemoteDescription(answer);
+  status("Connecting to the PC…");
+}
+
+function leave(msg) {
+  try { if (dc && dc.readyState === "open") dc.send('["r"]'); } catch (e) {}
+  if (pc) { pc.onconnectionstatechange = null; pc.close(); pc = null; }
+  if (mq) { mq.end(true); mq = null; }
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  $("stage").classList.remove("on");
+  $("join").style.display = "";
+  $("go").disabled = false;
+  status(msg || "", !!msg);
+}
+
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = $("name").value.trim();
+  if (!name) return;
+  try { localStorage.setItem("kinlink-name", name); } catch (x) {}
+  $("go").disabled = true;
+  try { await join(name); } catch (err) { leave(err.message || String(err)); }
+});
+$("leave").onclick = () => leave("");
+$("fs").onclick = async () => {
+  try {
+    if (document.fullscreenElement) { await document.exitFullscreen(); return; }
+    await $("stage").requestFullscreen();
+    // Chrome/Edge: in fullscreen, also send keys like Alt+Tab and Windows to the PC.
+    if (navigator.keyboard && navigator.keyboard.lock) await navigator.keyboard.lock();
+  } catch (e) {}
+};
+
+// ---------------------------------------------------------------- input
+const send = (a) => { if (dc && dc.readyState === "open") dc.send(JSON.stringify(a)); };
+const video = $("video");
+// Where the picture actually is inside the element (object-fit: contain leaves bars).
+function toRemote(e) {
+  const r = video.getBoundingClientRect(), vw = video.videoWidth || 16, vh = video.videoHeight || 9;
+  const s = Math.min(r.width / vw, r.height / vh), w = vw * s, h = vh * s;
+  const x = (e.clientX - r.left - (r.width - w) / 2) / w, y = (e.clientY - r.top - (r.height - h) / 2) / h;
+  return [Math.min(1, Math.max(0, x)), Math.min(1, Math.max(0, y))];
+}
+let pending = null;
+video.addEventListener("pointermove", (e) => {
+  if (!pending) requestAnimationFrame(() => { send(["m", ...pending]); pending = null; });
+  pending = toRemote(e);
+});
+const BTN = [0, 2, 1, 3, 4]; // browser: left, middle, right, back, forward -> ours: left, right, middle, back, forward
+video.addEventListener("pointerdown", (e) => { e.preventDefault(); video.setPointerCapture(e.pointerId); send(["m", ...toRemote(e)]); send(["b", BTN[e.button] ?? 0, 1]); });
+video.addEventListener("pointerup", (e) => { send(["m", ...toRemote(e)]); send(["b", BTN[e.button] ?? 0, 0]); });
+video.addEventListener("contextmenu", (e) => e.preventDefault());
+video.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const k = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1; // lines / pages -> pixels
+  send(["w", Math.round(e.deltaX * k * 1.2), Math.round(-e.deltaY * k * 1.2)]); // ~100 px = one notch (120)
+}, { passive: false });
+
+// KeyboardEvent.code -> Windows scan code [code, extended]
+const K = {};
+"Escape:1 Digit1:2 Digit2:3 Digit3:4 Digit4:5 Digit5:6 Digit6:7 Digit7:8 Digit8:9 Digit9:10 Digit0:11 Minus:12 Equal:13 Backspace:14 Tab:15 KeyQ:16 KeyW:17 KeyE:18 KeyR:19 KeyT:20 KeyY:21 KeyU:22 KeyI:23 KeyO:24 KeyP:25 BracketLeft:26 BracketRight:27 Enter:28 ControlLeft:29 KeyA:30 KeyS:31 KeyD:32 KeyF:33 KeyG:34 KeyH:35 KeyJ:36 KeyK:37 KeyL:38 Semicolon:39 Quote:40 Backquote:41 ShiftLeft:42 Backslash:43 KeyZ:44 KeyX:45 KeyC:46 KeyV:47 KeyB:48 KeyN:49 KeyM:50 Comma:51 Period:52 Slash:53 ShiftRight:54 NumpadMultiply:55 AltLeft:56 Space:57 CapsLock:58 F1:59 F2:60 F3:61 F4:62 F5:63 F6:64 F7:65 F8:66 F9:67 F10:68 ScrollLock:70 Numpad7:71 Numpad8:72 Numpad9:73 NumpadSubtract:74 Numpad4:75 Numpad5:76 Numpad6:77 NumpadAdd:78 Numpad1:79 Numpad2:80 Numpad3:81 Numpad0:82 NumpadDecimal:83 IntlBackslash:86 F11:87 F12:88"
+  .split(" ").forEach((p) => { const [c, s] = p.split(":"); K[c] = [+s, 0]; });
+"NumpadEnter:28 ControlRight:29 NumpadDivide:53 PrintScreen:55 AltRight:56 NumLock:69 Home:71 ArrowUp:72 PageUp:73 ArrowLeft:75 ArrowRight:77 End:79 ArrowDown:80 PageDown:81 Insert:82 Delete:83 MetaLeft:91 MetaRight:92 ContextMenu:93"
+  .split(" ").forEach((p) => { const [c, s] = p.split(":"); K[c] = [+s, 1]; });
+function onKey(e, down) {
+  if (!$("stage").classList.contains("on")) return;
+  const k = K[e.code];
+  if (!k) return;
+  e.preventDefault();
+  send(["k", k[0], k[1], down ? 1 : 0]);
+}
+addEventListener("keydown", (e) => onKey(e, true));
+addEventListener("keyup", (e) => onKey(e, false));
+addEventListener("blur", () => send(["r"])); // let go of held keys/buttons when the tab loses focus
+</script>
+</body>
+</html>

@@ -102,6 +102,16 @@ struct Shared {
     voice: Mutex<Option<crate::voice::Voice>>,
     /// Connection to the lock-screen helper (only while guests are connected).
     helper: Arc<Mutex<Option<crate::syshelper::Link>>>,
+    /// Guests watching from a browser (see web.rs).
+    web: Mutex<Vec<WebGuest>>,
+}
+
+struct WebGuest {
+    id: u64,
+    /// Shown in the guest list: "name (browser)".
+    name: String,
+    tx: std::sync::mpsc::SyncSender<Arc<crate::web::Frame>>,
+    alive: Arc<AtomicBool>,
 }
 
 impl Shared {
@@ -127,7 +137,8 @@ impl Shared {
     }
 
     fn refresh_clients(&self, why: Option<&str>) {
-        let names: Vec<String> = self.sessions.lock().unwrap().iter().map(|s| s.name.clone()).collect();
+        let mut names: Vec<String> = self.sessions.lock().unwrap().iter().map(|s| s.name.clone()).collect();
+        names.extend(self.web.lock().unwrap().iter().map(|g| g.name.clone()));
         let mut st = self.status.lock().unwrap();
         if names.is_empty() {
             if let Some(w) = why {
@@ -155,9 +166,13 @@ impl Shared {
 
     /// Lowest common quality across guests so everyone can keep up: (max_height, max_bitrate bps).
     fn quality(&self) -> (u32, u32) {
+        // Browser guests: 1080p at up to 8 Mbps (no quality picker there, and WebRTC over the
+        // internet copes badly with more).
+        let web = !self.web.lock().unwrap().is_empty();
         let ss = self.sessions.lock().unwrap();
-        let h = ss.iter().map(|s| s.max_height).filter(|h| *h > 0).min().unwrap_or(0);
+        let h = ss.iter().map(|s| s.max_height).filter(|h| *h > 0).min().unwrap_or(if web { 1080 } else { 0 });
         let mbps = ss.iter().map(|s| s.mbps).min().unwrap_or(self.cfg.max_mbps);
+        let mbps = if web { mbps.min(8) } else { mbps };
         (h, mbps * 1_000_000)
     }
 
@@ -224,6 +239,7 @@ impl Host {
             upnp_ext: Mutex::new(None),
             voice: Mutex::new(None),
             helper: Arc::new(Mutex::new(None)),
+            web: Mutex::new(Vec::new()),
         });
         sh.injector.lock().unwrap().helper = Some(sh.helper.clone());
         {
@@ -280,6 +296,9 @@ impl Host {
     /// Disconnects one guest by name (host's "Disconnect" button).
     pub fn kick(&self, name: &str) {
         let sh = &self.r.0;
+        for g in sh.web.lock().unwrap().iter().filter(|g| g.name == name) {
+            g.alive.store(false, SeqCst);
+        }
         let found = sh.sessions.lock().unwrap().iter().find(|s| s.name == name).map(|s| (s.id, s.sock, s.addr, s.cipher.clone()));
         if let Some((id, sock, addr, cipher)) = found {
             let bye = encode(&Msg::Reject { reason: "The host ended the session".into() });
@@ -350,6 +369,9 @@ impl Host {
     /// Panic button: disconnects every guest at once.
     pub fn kick_all(&self) {
         let sh = &self.r.0;
+        for g in sh.web.lock().unwrap().iter() {
+            g.alive.store(false, SeqCst);
+        }
         sh.broadcast(&Msg::Reject { reason: "The host ended the session".into() });
         let ids: Vec<u64> = sh.sessions.lock().unwrap().iter().map(|s| s.id).collect();
         for id in ids {
@@ -403,11 +425,74 @@ impl Host {
 
 impl Drop for Host {
     fn drop(&mut self) {
+        crate::web::set_accept(None);
         self.shutdown();
     }
 }
 
 impl HostRef {
+    /// A link anyone can open in a browser to join (valid for an hour).
+    pub fn web_link(&self, perms: Perms) -> String {
+        let weak = Arc::downgrade(&self.0);
+        crate::web::new_link(
+            perms,
+            Arc::new(move |name, perms, offer| {
+                let sh = weak.upgrade().ok_or("That PC isn't hosting right now.")?;
+                HostRef(sh).add_web_guest(name, perms, offer)
+            }),
+        )
+    }
+
+    fn add_web_guest(&self, name: String, perms: Perms, offer: str0m::change::SdpOffer) -> Result<str0m::change::SdpAnswer, String> {
+        let id: u64 = rand::random();
+        let (tx, frames) = std::sync::mpsc::sync_channel(8);
+        let alive = Arc::new(AtomicBool::new(true));
+        let (w1, w2, w3) = (Arc::downgrade(&self.0), Arc::downgrade(&self.0), Arc::downgrade(&self.0));
+        let answer = crate::web::serve(
+            offer,
+            crate::web::Guest {
+                frames,
+                alive: alive.clone(),
+                on_input: Box::new(move |i| {
+                    let Some(sh) = w1.upgrade() else { return };
+                    let allowed = match i {
+                        Input::Key { .. } => perms.keyboard,
+                        Input::Pad { .. } | Input::PadRemove { .. } => perms.gamepad,
+                        Input::ReleaseAll => true,
+                        _ => perms.mouse,
+                    };
+                    if allowed {
+                        sh.injector.lock().unwrap().apply(id, i);
+                    }
+                }),
+                on_keyframe: Box::new(move || {
+                    if let Some(sh) = w2.upgrade() {
+                        sh.keyframe.store(true, SeqCst);
+                    }
+                }),
+                on_end: Box::new(move || {
+                    let Some(sh) = w3.upgrade() else { return };
+                    sh.web.lock().unwrap().retain(|g| g.id != id);
+                    sh.injector.lock().unwrap().release(id);
+                    let (_, cap) = sh.quality();
+                    sh.bitrate.store(cap, SeqCst);
+                    sh.refresh_clients(Some("browser guest left"));
+                    crate::plog!("web: browser guest left");
+                }),
+            },
+        )?;
+        let sh = &self.0;
+        let label = format!("{name} (browser)");
+        crate::plog!("web: {label} joined with a browser link");
+        crate::notify::toast(&crate::i18n::tlf("{} joined from a browser", &[&name]), &crate::i18n::tl("Kick them from This PC if you didn't expect this."));
+        sh.web.lock().unwrap().push(WebGuest { id, name: label, tx, alive });
+        let (_, cap) = sh.quality();
+        sh.bitrate.store(cap, SeqCst);
+        sh.keyframe.store(true, SeqCst);
+        sh.refresh_clients(None);
+        Ok(answer)
+    }
+
     /// Registers an approved session and returns the addresses the client should try.
     /// Blocks ~1-2 s for STUN; call off the UI thread.
     pub fn prepare(&self, cipher: Cipher, perms: Perms, name: String) -> Vec<SocketAddr> {
@@ -694,7 +779,8 @@ fn video_loop(sh: Arc<Shared>) {
 
     while !sh.stop.load(SeqCst) {
         let targets: Vec<(SocketAddr, usize, Arc<Cipher>)> = sh.sessions.lock().unwrap().iter().map(|s| (s.addr, s.sock, s.cipher.clone())).collect();
-        if targets.is_empty() {
+        let web_on = !sh.web.lock().unwrap().is_empty();
+        if targets.is_empty() && !web_on {
             cap = None;
             enc = None;
             sent_shape = u32::MAX;
@@ -852,6 +938,10 @@ fn video_loop(sh: Arc<Shared>) {
                 sh.keyframe.store(true, SeqCst);
             }
             continue;
+        }
+        if web_on {
+            let f = Arc::new(crate::web::Frame { data: data.as_slice().into(), key });
+            sh.web.lock().unwrap().retain(|g| !matches!(g.tx.try_send(f.clone()), Err(std::sync::mpsc::TrySendError::Disconnected(_))));
         }
         // ponytail: whole frame sent as one burst per guest; add pacing if big keyframes overflow slow links
         let count = data.len().div_ceil(CHUNK) as u16;

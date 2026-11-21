@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const BROKERS: &[(&str, u16)] = &[("broker.emqx.io", 8883), ("broker.hivemq.com", 8883)];
+pub(crate) const BROKERS: &[(&str, u16)] = &[("broker.emqx.io", 8883), ("broker.hivemq.com", 8883)];
 const PREFIX: &str = "pc1x";
 const ONLINE_FOR: Duration = Duration::from_secs(70);
 
@@ -208,7 +208,7 @@ fn kind(s: &Sig) -> String {
 }
 
 /// TLS with Mozilla's root list compiled in (same on Windows and Android).
-fn tls() -> Transport {
+pub(crate) fn tls() -> Transport {
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let cfg = rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
