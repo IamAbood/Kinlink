@@ -69,6 +69,8 @@ pub enum Sig {
     MessageAck { id: u64 },
     /// Connect with an invite code instead of being friends. `name` = the guest's full id.
     GuestConnect { code: String, name: String, req: u64, eph: Pub, addrs: Vec<SocketAddr> },
+    /// "Please connect to my PC and help me" (older versions ignore it).
+    HelpRequest,
 }
 
 /// An invite this PC handed out: one use, expires after an hour.
@@ -134,6 +136,8 @@ pub enum Event {
     GuestConnect { from: Pub, name: String, req: u64, eph: Pub, addrs: Vec<SocketAddr>, mouse: bool, keyboard: bool, gamepad: bool },
     /// The host we're joining by invite was found: send it the request now.
     JoinReady { host: Pub, host_id: String },
+    /// A friend asked us to connect and help them.
+    HelpRequest(Pub),
 }
 
 /// Writes a friends file directly (test profiles).
@@ -282,6 +286,11 @@ impl Signal {
     }
 
     /// Sets my status and tells every friend.
+    /// Asks a friend to connect to this PC and help.
+    pub fn ask_help(&self, to: &Pub) {
+        self.send(to, Sig::HelpRequest);
+    }
+
     pub fn set_status(&self, text: &str) {
         let text: String = text.trim().chars().take(40).collect();
         *self.0.my_status.lock().unwrap() = text.clone();
@@ -782,6 +791,11 @@ impl Signal {
                 if new {
                     self.save_messages();
                     self.event(Event::Message { from, text });
+                }
+            }
+            Sig::HelpRequest => {
+                if self.friend(&from).is_some() {
+                    self.event(Event::HelpRequest(from));
                 }
             }
             Sig::MessageAck { id } => {

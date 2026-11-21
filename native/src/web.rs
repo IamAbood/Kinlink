@@ -40,6 +40,8 @@ struct Link {
     secret: [u8; 16],
     perms: Perms,
     expires: Instant,
+    /// Watch party: many people can use it (otherwise one use, like invites).
+    multi: bool,
 }
 
 struct Web {
@@ -72,14 +74,16 @@ pub fn set_accept(a: Option<Arc<Accept>>) {
     }
 }
 
-/// A new browser link (valid for an hour) for guests with these permissions.
-pub fn new_link(perms: Perms, accept: Arc<Accept>) -> String {
+/// A new browser link for guests with these permissions: one use for an hour, or a watch
+/// party (`multi`): any number of uses for 3 hours.
+pub fn new_link(perms: Perms, multi: bool, accept: Arc<Accept>) -> String {
     let w = web();
     *w.accept.lock().unwrap() = Some(accept);
     let secret: [u8; 16] = rand::random();
     let mut links = w.links.lock().unwrap();
     links.retain(|l| l.expires > Instant::now());
-    links.push(Link { secret, perms, expires: Instant::now() + LINK_FOR });
+    let valid = if multi { LINK_FOR * 3 } else { LINK_FOR };
+    links.push(Link { secret, perms, expires: Instant::now() + valid, multi });
     for c in w.clients.lock().unwrap().iter().flatten() {
         let _ = c.try_subscribe(format!("{}/b", topic(&secret)), QoS::AtLeastOnce);
     }
@@ -149,8 +153,8 @@ impl Web {
     }
 
     fn on_offer(&self, client: &Client, t: &str, payload: &[u8]) {
-        let found = self.links.lock().unwrap().iter().find(|l| format!("{}/b", topic(&l.secret)) == t).map(|l| (l.secret, l.perms, l.expires));
-        let Some((secret, perms, expires)) = found else { return };
+        let found = self.links.lock().unwrap().iter().find(|l| format!("{}/b", topic(&l.secret)) == t).map(|l| (l.secret, l.perms, l.expires, l.multi));
+        let Some((secret, perms, expires, multi)) = found else { return };
         let Some(plain) = open(&secret, payload) else { return };
         let Ok(msg) = serde_json::from_slice::<serde_json::Value>(&plain) else { return };
         let id = msg["id"].as_str().unwrap_or_default().to_string();
@@ -176,8 +180,10 @@ impl Web {
                 (_, Err(e)) => serde_json::json!({ "id": id, "error": e }),
                 (Some(a), Ok(offer)) => match a(name.clone(), perms, offer) {
                     Ok(answer) => {
-                        // One use, like invites.
-                        self.links.lock().unwrap().retain(|l| l.secret != secret);
+                        // One use, like invites (watch party links stay).
+                        if !multi {
+                            self.links.lock().unwrap().retain(|l| l.secret != secret);
+                        }
                         serde_json::json!({ "id": id, "answer": answer })
                     }
                     Err(e) => serde_json::json!({ "id": id, "error": e }),

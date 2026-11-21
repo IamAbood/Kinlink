@@ -28,6 +28,8 @@ pub struct HostConfig {
     pub fps: u32,
     pub hardware: bool,
     pub upnp: bool,
+    /// Record what guests see to Videos\Kinlink.
+    pub record: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -432,10 +434,11 @@ impl Drop for Host {
 
 impl HostRef {
     /// A link anyone can open in a browser to join (valid for an hour).
-    pub fn web_link(&self, perms: Perms) -> String {
+    pub fn web_link(&self, perms: Perms, watch_party: bool) -> String {
         let weak = Arc::downgrade(&self.0);
         crate::web::new_link(
             perms,
+            watch_party,
             Arc::new(move |name, perms, offer| {
                 let sh = weak.upgrade().ok_or("That PC isn't hosting right now.")?;
                 HostRef(sh).add_web_guest(name, perms, offer)
@@ -444,6 +447,9 @@ impl HostRef {
     }
 
     fn add_web_guest(&self, name: String, perms: Perms, offer: str0m::change::SdpOffer) -> Result<str0m::change::SdpAnswer, String> {
+        if self.0.web.lock().unwrap().len() >= 8 {
+            return Err("Sorry, it's full (8 people are already watching).".into());
+        }
         let id: u64 = rand::random();
         let (tx, frames) = std::sync::mpsc::sync_channel(8);
         let alive = Arc::new(AtomicBool::new(true));
@@ -770,6 +776,15 @@ fn video_loop(sh: Arc<Shared>) {
     let mut frame_id = 0u32;
     let mut dirty = false;
     let mut enc_fps = 0;
+    // Host-side recording (Settings): one file per stretch of guests being connected.
+    let mut recorder: Option<crate::rec::Recorder> = None;
+    let finish_rec = |r: crate::rec::Recorder, sh: &Shared| match r.finish() {
+        Ok(p) => {
+            crate::plog!("host: session recording saved to {}", p.display());
+            sh.status.lock().unwrap().notes.push(format!("Session recording saved to {}", p.display()));
+        }
+        Err(e) => crate::plog!("host: recording failed: {e:#}"),
+    };
     let mut next_slot = Instant::now();
     let mut sent_shape = u32::MAX;
     let (mut n_frames, mut n_bytes, mut enc_time, mut tick) = (0u32, 0usize, Duration::ZERO, Instant::now());
@@ -781,6 +796,9 @@ fn video_loop(sh: Arc<Shared>) {
         let targets: Vec<(SocketAddr, usize, Arc<Cipher>)> = sh.sessions.lock().unwrap().iter().map(|s| (s.addr, s.sock, s.cipher.clone())).collect();
         let web_on = !sh.web.lock().unwrap().is_empty();
         if targets.is_empty() && !web_on {
+            if let Some(r) = recorder.take() {
+                finish_rec(r, &sh);
+            }
             cap = None;
             enc = None;
             sent_shape = u32::MAX;
@@ -938,6 +956,21 @@ fn video_loop(sh: Arc<Shared>) {
                 sh.keyframe.store(true, SeqCst);
             }
             continue;
+        }
+        if sh.cfg.record {
+            if recorder.as_ref().is_some_and(|r| r.size != (w, h)) {
+                finish_rec(recorder.take().unwrap(), &sh);
+            }
+            match recorder.as_mut() {
+                Some(r) => {
+                    let _ = r.video(&data, key);
+                }
+                None if key => match crate::rec::Recorder::start(&data, w, h, 0) {
+                    Ok(r) => recorder = Some(r),
+                    Err(e) => crate::plog!("host: can't record: {e:#}"),
+                },
+                None => sh.keyframe.store(true, SeqCst), // a recording has to start on a keyframe
+            }
         }
         if web_on {
             let f = Arc::new(crate::web::Frame { data: data.as_slice().into(), key });

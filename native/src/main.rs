@@ -120,9 +120,9 @@ fn main() {
     }
     if args.iter().any(|a| a == "--webtest") {
         // View-only host + a browser link; prints who's connected for 3 minutes.
-        let cfg = host::HostConfig { name: "host".into(), port: 47896, max_mbps: 8, fps: 30, hardware: true, upnp: false };
+        let cfg = host::HostConfig { name: "host".into(), port: 47896, max_mbps: 8, fps: 30, hardware: true, upnp: false, record: std::env::var_os("PCLONE_RECORD").is_some() };
         let h = host::Host::start(cfg).unwrap();
-        let link = h.handle().web_link(host::Perms { mouse: false, keyboard: false, gamepad: false });
+        let link = h.handle().web_link(host::Perms { mouse: false, keyboard: false, gamepad: false }, std::env::var_os("PCLONE_PARTY").is_some());
         let local = link.replacen(crate::web::PAGE, "http://localhost:8765/", 1);
         println!("LINK {link}
 LOCAL {local}");
@@ -227,7 +227,7 @@ fn helpertest() -> i32 {
     if args_has("--stream") {
         // Session whose video comes from the SYSTEM helper (PCLONE_FORCE_HELPER), no UAC needed.
         unsafe { std::env::set_var("PCLONE_FORCE_HELPER", "1") };
-        let cfg = host::HostConfig { name: "host".into(), port: 47897, max_mbps: 20, fps: 30, hardware: true, upnp: false };
+        let cfg = host::HostConfig { name: "host".into(), port: 47897, max_mbps: 20, fps: 30, hardware: true, upnp: false, record: false };
         let h = host::Host::start(cfg).unwrap();
         let (ce, he) = (crypto::Ephemeral::new(), crypto::Ephemeral::new());
         h.handle().prepare(he.cipher(&ce.public, 78, false), host::Perms { mouse: false, keyboard: false, gamepad: false }, "g#0001".into());
@@ -250,7 +250,7 @@ fn helpertest() -> i32 {
     }
     // Optionally run a real encrypted session so the guest's screenshot shows what it streamed.
     let session = args_has("--session").then(|| {
-        let cfg = host::HostConfig { name: "host".into(), port: 47898, max_mbps: 20, fps: 30, hardware: true, upnp: false };
+        let cfg = host::HostConfig { name: "host".into(), port: 47898, max_mbps: 20, fps: 30, hardware: true, upnp: false, record: false };
         let h = host::Host::start(cfg).unwrap();
         let (ce, he) = (crypto::Ephemeral::new(), crypto::Ephemeral::new());
         h.handle().prepare(he.cipher(&ce.public, 77, false), host::Perms { mouse: true, keyboard: true, gamepad: false }, "g#0001".into());
@@ -443,7 +443,7 @@ fn padtest() -> i32 {
 /// Encrypted multi-guest loopback: two guests with different permissions, kick one mid-session.
 /// Run with PCLONE_DRY_INPUT=1 (host logs input instead of injecting).
 fn selftest(software: bool) -> i32 {
-    let cfg = host::HostConfig { name: "host".into(), port: 47899, max_mbps: 20, fps: 60, hardware: !software, upnp: false };
+    let cfg = host::HostConfig { name: "host".into(), port: 47899, max_mbps: 20, fps: 60, hardware: !software, upnp: false, record: false };
     let h = match host::Host::start(cfg) {
         Ok(h) => h,
         Err(e) => {
@@ -629,6 +629,10 @@ fn signaltest() -> i32 {
         return 1;
     }
     if !wait("A sees it delivered", 20, &|| a.messages(&bpub).iter().any(|x| x.mine && x.delivered)) {
+        return 1;
+    }
+    a.ask_help(&bpub);
+    if !wait("B gets A's help request", 20, &|| b.take_events().iter().any(|e| matches!(e, Event::HelpRequest(p) if *p == apub))) {
         return 1;
     }
     a.send(&bpub, Sig::Connect { req: 9, eph: [1; 32], addrs: vec!["203.0.113.1:5000".parse().unwrap()] });

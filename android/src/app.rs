@@ -249,7 +249,7 @@ impl App {
                     s.send_to(&name, &from, Sig::ConnectNo { req, reason: "is on a phone (can't be controlled)".into() });
                 }
             }
-            Event::JoinReady { .. } => {}
+            Event::JoinReady { .. } | Event::HelpRequest(_) => {}
         }
     }
 

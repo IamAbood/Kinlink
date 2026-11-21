@@ -31,11 +31,17 @@ pub struct Settings {
     /// Controller remap: entry i = which button (bit index) physical button i acts as.
     /// Empty = unchanged.
     pub pad_map: Vec<u8>,
+    /// Keep a live fps/latency readout on screen during sessions.
+    pub show_stats: bool,
+    /// In-session shortcut modifiers: bit 0 Ctrl, 1 Alt, 2 Shift (default all three).
+    pub hotkey_mods: u8,
+    /// Save every session hosted on this PC as a video (Videos\Kinlink).
+    pub record_sessions: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { hosting: true, port: crate::proto::DEFAULT_PORT, max_mbps: 30, fps: 60, hardware: true, upnp: true, autostart_init: false, fullscreen_connect: true, hint_seen: false, notify_online: true, language: String::new(), status: String::new(), ask_files: true, pad_map: Vec::new() }
+        Self { hosting: true, port: crate::proto::DEFAULT_PORT, max_mbps: 30, fps: 60, hardware: true, upnp: true, autostart_init: false, fullscreen_connect: true, hint_seen: false, notify_online: true, language: String::new(), status: String::new(), ask_files: true, pad_map: Vec::new(), show_stats: false, hotkey_mods: 7, record_sessions: false }
     }
 }
 

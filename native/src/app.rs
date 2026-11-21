@@ -41,6 +41,15 @@ const QUALITIES: &[(&str, u32)] = &[("Low (5 Mbps)", 5), ("Medium (10 Mbps)", 10
 /// One-tap presets: (name, RESOLUTIONS index, QUALITIES index, sharp text).
 const PRESETS: &[(&str, usize, usize, bool)] = &[("Low data", 4, 0, false), ("Balanced", 2, 2, false), ("Best", 0, 3, false), ("Sharp text", 0, 3, true)];
 
+/// Choices for the in-session shortcut modifiers (bit 0 Ctrl, 1 Alt, 2 Shift).
+const HOTKEY_MODS: &[(u8, &str)] = &[(7, "Ctrl+Alt+Shift"), (5, "Ctrl+Shift"), (3, "Ctrl+Alt"), (6, "Alt+Shift")];
+
+/// A hint text with the user's shortcut modifiers instead of the default Ctrl+Alt+Shift.
+fn hk(s: &Settings, text: &str) -> String {
+    let m = HOTKEY_MODS.iter().find(|m| m.0 == s.hotkey_mods).map(|m| m.1).unwrap_or("Ctrl+Alt+Shift");
+    text.replace("Ctrl+Alt+Shift", m)
+}
+
 /// Controller buttons as (XInput bit index, label), in remap-editor order.
 const PAD_BUTTONS: &[(u8, &str)] = &[(12, "A"), (13, "B"), (14, "X"), (15, "Y"), (8, "LB"), (9, "RB"), (6, "L3"), (7, "R3"), (4, "Start"), (5, "Back"), (0, "Up"), (1, "Down"), (2, "Left"), (3, "Right"), (10, "Guide")];
 
@@ -130,6 +139,10 @@ pub struct App {
     host: Option<Host>,
     host_err: Option<String>,
     popups: Vec<IncomingReq>,
+    /// Friends we asked for help (they get full control without a popup for 15 min).
+    help_asked: Vec<(Pub, Instant)>,
+    /// Friends asking us for help.
+    help_from: Vec<Pub>,
     outgoing: Option<Outgoing>,
     client: Option<Client>,
     peer: String,
@@ -217,6 +230,8 @@ impl App {
             host: None,
             host_err: None,
             popups: Vec::new(),
+            help_asked: Vec::new(),
+            help_from: Vec::new(),
             outgoing: None,
             client: None,
             peer: String::new(),
@@ -335,7 +350,7 @@ impl App {
 
     fn start_host(&mut self) {
         let name = self.signal.as_ref().map(|s| s.id()).unwrap_or_else(|| "Host".into());
-        let cfg = HostConfig { name, port: self.s.port, max_mbps: self.s.max_mbps, fps: self.s.fps, hardware: self.s.hardware, upnp: self.s.upnp };
+        let cfg = HostConfig { name, port: self.s.port, max_mbps: self.s.max_mbps, fps: self.s.fps, hardware: self.s.hardware, upnp: self.s.upnp, record: self.s.record_sessions };
         match Host::start(cfg) {
             Ok(h) => {
                 self.host = Some(h);
@@ -482,9 +497,16 @@ impl App {
             Event::IncomingConnect { from, req, eph, addrs } => {
                 let Some(f) = sig.friend(&from) else { return };
                 crate::plog!("host: {} wants to connect (hosting: {}, auto-accept: {})", f.id(), self.host.is_some(), f.auto_connect);
-                let r = IncomingReq { from, name: f.id(), req, eph, addrs, at: Instant::now(), guest: None };
+                let mut r = IncomingReq { from, name: f.id(), req, eph, addrs, at: Instant::now(), guest: None };
+                let helping = self.help_asked.iter().any(|(p, t)| *p == from && t.elapsed() < Duration::from_secs(900));
                 if self.host.is_none() {
                     self.decline_incoming(&r, "isn't accepting connections right now");
+                } else if helping {
+                    // We asked them for help: let them in with full control.
+                    self.help_asked.retain(|(p, _)| *p != from);
+                    r.guest = Some(Perms { mouse: true, keyboard: true, gamepad: true });
+                    self.toast(tlf("{} is connecting to help you", &[&f.id()]));
+                    self.accept_incoming(r);
                 } else if f.auto_connect {
                     self.toast(tlf("{} connected to this PC", &[&f.id()]));
                     self.accept_incoming(r);
@@ -536,6 +558,15 @@ impl App {
                     self.toast(tlf("{} joined with your invite", &[&name]));
                     crate::notify::toast(&tlf("{} joined with your invite", &[&name]), &tl("Kick them from This PC if you didn't expect this."));
                     self.accept_incoming(r);
+                }
+            }
+            Event::HelpRequest(from) => {
+                if let Some(f) = self.signal.as_ref().and_then(|s| s.friend(&from)) {
+                    if !self.help_from.contains(&from) {
+                        self.help_from.push(from);
+                    }
+                    crate::notify::toast(&tlf("{} needs help with their PC", &[&f.display()]), &tl("Open Kinlink and press Help to connect."));
+                    self.show_window();
                 }
             }
             Event::JoinReady { host, host_id } => {
@@ -673,7 +704,8 @@ impl App {
             SC_LSHIFT | SC_RSHIFT => self.mods[2] = k.down,
             _ => {}
         }
-        if k.down && self.mods == [true; 3] && matches!(k.scan, SC_Q | SC_O | SC_M | SC_R | SC_F | SC_C | SC_P | SC_V) {
+        let want = [self.s.hotkey_mods & 1 != 0, self.s.hotkey_mods & 2 != 0, self.s.hotkey_mods & 4 != 0];
+        if k.down && self.mods == want && matches!(k.scan, SC_Q | SC_O | SC_M | SC_R | SC_F | SC_C | SC_P | SC_V) {
             c.input(Input::ReleaseAll); // drop the held modifiers on the host
             match k.scan {
                 SC_Q => self.leave_stream(None),
@@ -690,7 +722,7 @@ impl App {
                 SC_V => {
                     let on = !c.mic_on();
                     c.set_mic(on);
-                    self.bubble = Some((if on { "Microphone on (Ctrl+Alt+Shift+V to mute)".into() } else { "Microphone off".into() }, Instant::now()));
+                    self.bubble = Some((if on { hk(&self.s, "Microphone on (Ctrl+Alt+Shift+V to mute)") } else { "Microphone off".into() }, Instant::now()));
                 }
                 _ => {}
             }
@@ -918,6 +950,42 @@ impl App {
                     });
                 });
         }
+        // Friends asking for help.
+        let mut help: Option<(Pub, bool)> = None;
+        for (i, from) in self.help_from.iter().enumerate() {
+            let Some(f) = sig.as_ref().and_then(|s| s.friend(from)) else { continue };
+            egui::Window::new("help")
+                .id(egui::Id::new(("help", i)))
+                .title_bar(false)
+                .collapsible(false)
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(Color32::from_rgb(0x16, 0x1F, 0x3A)).stroke(egui::Stroke::new(1.0, t::ACCENT_LINE)).corner_radius(16.0).inner_margin(egui::Margin::same(18)))
+                .anchor(egui::Align2::LEFT_BOTTOM, [24.0, -24.0 - i as f32 * 150.0])
+                .show(ctx, |ui| {
+                    ui.set_width(280.0);
+                    ui.horizontal(|ui| {
+                        t::avatar(ui, &f.display(), None, 38.0);
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(f.display()).font(egui::FontId::new(14.0, t::bold())));
+                            ui.label(RichText::new(tr("is asking for your help")).size(12.0).color(t::MUTED));
+                        });
+                    });
+                    ui.horizontal(|ui| {
+                        if t::primary(ui, &tr("Help"), None, self.client.is_none()).clicked() {
+                            help = Some((*from, true));
+                        }
+                        if ui.add(egui::Button::new(tr("Not now")).min_size(egui::vec2(100.0, 36.0))).clicked() {
+                            help = Some((*from, false));
+                        }
+                    });
+                });
+        }
+        if let Some((from, go)) = help {
+            self.help_from.retain(|p| *p != from);
+            if let (true, Some(f)) = (go, sig.as_ref().and_then(|s| s.friend(&from))) {
+                self.connect_to(&f);
+            }
+        }
         if let Some((i, yes)) = decided {
             let r = self.popups.remove(i);
             if yes {
@@ -1019,7 +1087,7 @@ impl App {
         let unread = if self.chat_open { 0 } else { c.take_unread() };
         if unread > 0 {
             if let Some((from, text)) = c.chat_log().last() {
-                self.bubble = Some((format!("{from}: {text}   ({})", tl("Ctrl+Alt+Shift+C to reply")), Instant::now()));
+                self.bubble = Some((format!("{from}: {text}   ({})", hk(&self.s, &tl("Ctrl+Alt+Shift+C to reply"))), Instant::now()));
             }
         }
         let transfers = c.transfers();
@@ -1137,6 +1205,15 @@ impl App {
         use crate::theme::{self as t, Icon};
         self.draw_remote_cursor(ctx);
         let Some(c) = &self.client else { return };
+        if self.s.show_stats {
+            let st = c.stats();
+            egui::Area::new(egui::Id::new("stats_hud")).anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0]).interactable(false).show(ctx, |ui| {
+                egui::Frame::NONE.fill(Color32::from_black_alpha(150)).corner_radius(8.0).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
+                    let col = if st.rtt_ms > 80.0 || st.fps < 20.0 { Color32::from_rgb(0xFF, 0xC9, 0x8A) } else { Color32::from_rgb(0x9B, 0xF0, 0xC8) };
+                    ui.add(egui::Label::new(RichText::new(format!("{:.0} fps · {:.0} ms · {:.1} Mbps · lost {}", st.fps, st.rtt_ms, st.mbps, st.lost)).monospace().size(11.0).color(col)).extend());
+                });
+            });
+        }
         if !self.overlay_shown {
             // Menu hidden (Ctrl+Alt+Shift+O): chat, transfers and bubbles still work.
             let frame = egui::Frame::NONE.fill(Color32::from_rgba_unmultiplied(15, 22, 41, 246)).inner_margin(14.0).corner_radius(16.0);
@@ -1196,16 +1273,16 @@ impl App {
                 let mic = c.mic_on();
                 let rec = c.is_recording();
                 ui.horizontal(|ui| {
-                    if t::tile(ui, Icon::Mic, &if mic { tr("Mic on") } else { tr("Mic off") }, mic.then_some(t::MINT), w).on_hover_text(tr("Voice chat · Ctrl+Alt+Shift+V · use headphones")).clicked() {
+                    if t::tile(ui, Icon::Mic, &if mic { tr("Mic on") } else { tr("Mic off") }, mic.then_some(t::MINT), w).on_hover_text(hk(&self.s, &tr("Voice chat · Ctrl+Alt+Shift+V · use headphones"))).clicked() {
                         c.set_mic(!mic);
                     }
-                    if t::tile(ui, Icon::Chat, &tr("Chat"), self.chat_open.then_some(t::ACCENT_SOFT), w).on_hover_text(tr("Ctrl+Alt+Shift+C")).clicked() {
+                    if t::tile(ui, Icon::Chat, &tr("Chat"), self.chat_open.then_some(t::ACCENT_SOFT), w).on_hover_text(hk(&self.s, &tr("Ctrl+Alt+Shift+C"))).clicked() {
                         toggle_chat = true;
                     }
                     if t::tile(ui, Icon::Upload, &tr("Send file"), None, w).on_hover_text(tr("Or drag files onto this window")).clicked() {
                         pick = true;
                     }
-                    if t::tile(ui, Icon::Camera, &tr("Screenshot"), None, w).on_hover_text(tr("Ctrl+Alt+Shift+P · Pictures\\Kinlink")).clicked() {
+                    if t::tile(ui, Icon::Camera, &tr("Screenshot"), None, w).on_hover_text(hk(&self.s, &tr("Ctrl+Alt+Shift+P · Pictures\\Kinlink"))).clicked() {
                         shot = true;
                     }
                 });
@@ -1213,13 +1290,13 @@ impl App {
                     if t::tile(ui, Icon::Record, &if rec { tr("Stop rec") } else { tr("Record") }, rec.then_some(t::DANGER), w).on_hover_text(tr("MP4 in Videos\\Kinlink")).clicked() {
                         if rec { c.stop_recording() } else { c.start_recording() }
                     }
-                    if t::tile(ui, if is_full { Icon::Shrink } else { Icon::Expand }, &if is_full { tr("Windowed") } else { tr("Fullscreen") }, None, w).on_hover_text(tr("Ctrl+Alt+Shift+F")).clicked() {
+                    if t::tile(ui, if is_full { Icon::Shrink } else { Icon::Expand }, &if is_full { tr("Windowed") } else { tr("Fullscreen") }, None, w).on_hover_text(hk(&self.s, &tr("Ctrl+Alt+Shift+F"))).clicked() {
                         toggle_full = true;
                     }
-                    if t::tile(ui, Icon::Lock, &tr("Lock mouse"), self.relative.then_some(t::ACCENT_SOFT), w).on_hover_text(tr("For games · Ctrl+Alt+Shift+R to unlock")).clicked() {
+                    if t::tile(ui, Icon::Lock, &tr("Lock mouse"), self.relative.then_some(t::ACCENT_SOFT), w).on_hover_text(hk(&self.s, &tr("For games · Ctrl+Alt+Shift+R to unlock"))).clicked() {
                         toggle_rel = true;
                     }
-                    if t::tile(ui, Icon::Hide, &tr("Hide all"), None, w).on_hover_text(tr("Hides the menu button too · Ctrl+Alt+Shift+O brings it back")).clicked() {
+                    if t::tile(ui, Icon::Hide, &tr("Hide all"), None, w).on_hover_text(hk(&self.s, &tr("Hides the menu button too · Ctrl+Alt+Shift+O brings it back"))).clicked() {
                         hide_menu = true;
                     }
                 });
@@ -1284,7 +1361,10 @@ impl App {
                     ui.set_width(ui.available_width());
                     ui.label(RichText::new(format!("{:.0} fps · {:.0} ms · {:.1} Mbps · decode {:.1} ms · lost {}", st.fps, st.rtt_ms, st.mbps, st.decode_ms, st.lost)).monospace().size(11.0).color(t::MUTED));
                 });
-                para(ui, &tl("Ctrl+Alt+Shift: Q disconnect · O hide · R lock mouse · F fullscreen"), 11.0, t::MUTED);
+                if ui.checkbox(&mut self.s.show_stats, tr("Keep these numbers on screen")).changed() {
+                    self.s.save();
+                }
+                para(ui, &hk(&self.s, &tl("Ctrl+Alt+Shift: Q disconnect · O hide · R lock mouse · F fullscreen")), 11.0, t::MUTED);
                 let fresh = self.overlay_opened.elapsed() < Duration::from_millis(500);
                 if t::danger_wide(ui, &tr("Disconnect"), !fresh).clicked() && !fresh {
                     disconnect = true;
@@ -1321,7 +1401,7 @@ impl App {
         if self.show_hint && self.stream_started.elapsed() < Duration::from_secs(6) && !self.overlay_open {
             egui::Area::new(egui::Id::new("hint")).anchor(egui::Align2::CENTER_TOP, [0.0, 14.0]).show(ctx, |ui| {
                 frame.show(ui, |ui| {
-                    ui.colored_label(Color32::WHITE, tr("Menu: small button top-left · Ctrl+Alt+Shift+Q to disconnect"));
+                    ui.colored_label(Color32::WHITE, hk(&self.s, &tr("Menu: small button top-left · Ctrl+Alt+Shift+Q to disconnect")));
                 });
             });
         }
@@ -1494,7 +1574,7 @@ impl App {
                     }
                 });
             } else {
-                para(ui, &tl("In a session: Ctrl+Alt+Shift + Q disconnect · O hide menu · R lock mouse · F fullscreen"), 11.0, t::MUTED);
+                para(ui, &hk(&self.s, &tl("In a session: Ctrl+Alt+Shift + Q disconnect · O hide menu · R lock mouse · F fullscreen")), 11.0, t::MUTED);
             }
         });
 
@@ -1584,6 +1664,28 @@ impl App {
                                 let on = members.iter().filter(|(_, o)| *o).count();
                                 let title = if group.is_empty() { tl("Other") } else { group.clone() };
                                 t::section(ui, &trf("{} · {}/{} online", &[&title, &on.to_string(), &members.len().to_string()]));
+                                if !group.is_empty() {
+                                    let mut set: Option<bool> = None;
+                                    ui.horizontal(|ui| {
+                                        if ui.small_button(tr("Allow control for this group")).on_hover_text(tr("Mouse and keyboard for everyone in the group")).clicked() {
+                                            set = Some(true);
+                                        }
+                                        if ui.small_button(tr("View only for this group")).clicked() {
+                                            set = Some(false);
+                                        }
+                                    });
+                                    if let Some(v) = set {
+                                        for (f, _) in &members {
+                                            let mut g = f.clone();
+                                            (g.allow_mouse, g.allow_keyboard) = (v, v);
+                                            if let Some(h) = &self.host {
+                                                h.set_perms(&g.id(), Perms { mouse: v, keyboard: v, gamepad: g.allow_gamepad });
+                                            }
+                                            sig.update(g);
+                                        }
+                                        self.toast(if v { tlf("Everyone in {} can now use mouse and keyboard", &[&group]) } else { tlf("Everyone in {} can now only watch", &[&group]) });
+                                    }
+                                }
                             }
                             t::card().inner_margin(egui::Margin::symmetric(14, 6)).show(ui, |ui| {
                                 ui.set_width(ui.available_width());
@@ -1748,12 +1850,23 @@ impl App {
                                     let host = self.host.as_ref().map(|h| h.handle());
                                     if ui.add_enabled(host.is_some(), egui::Button::new(tr("Browser link"))).on_hover_text(tr("For someone without Kinlink: they open it in Chrome, Edge, Firefox or Safari. Mouse and keyboard only.")).clicked() {
                                         if let Some(h) = host {
-                                            let link = h.web_link(self.invite_perms);
+                                            let link = h.web_link(self.invite_perms, false);
                                             ui.ctx().copy_text(link);
                                             self.toast(tl("Browser link copied. Anyone who opens it can join once, within 1 hour."));
                                         }
                                     }
                                     ui.label(RichText::new(tr("No install needed")).size(11.5).color(t::MUTED));
+                                });
+                                ui.horizontal(|ui| {
+                                    let host = self.host.as_ref().map(|h| h.handle());
+                                    if ui.add_enabled(host.is_some(), egui::Button::new(tr("Watch party link"))).on_hover_text(tr("Up to 8 people watch your screen from their browsers at once (no control).")).clicked() {
+                                        if let Some(h) = host {
+                                            let link = h.web_link(Perms { mouse: false, keyboard: false, gamepad: false }, true);
+                                            ui.ctx().copy_text(link);
+                                            self.toast(tl("Watch party link copied: up to 8 people can watch for 3 hours."));
+                                        }
+                                    }
+                                    ui.label(RichText::new(tr("View only, many people")).size(11.5).color(t::MUTED));
                                 });
                                 for inv in sig.invites() {
                                     let mins = inv.expires.saturating_duration_since(Instant::now()).as_secs() / 60 + 1;
@@ -1915,11 +2028,24 @@ impl App {
                                     crate::files::ASK.store(self.s.ask_files, std::sync::atomic::Ordering::Relaxed);
                                     self.s.save();
                                 }
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(tr("Session shortcut keys")).color(t::SOFT));
+                                    let cur = HOTKEY_MODS.iter().find(|m| m.0 == self.s.hotkey_mods).map(|m| m.1).unwrap_or("Ctrl+Alt+Shift");
+                                    egui::ComboBox::from_id_salt("hkmods").selected_text(cur).show_ui(ui, |ui| {
+                                        for (bits, name) in HOTKEY_MODS {
+                                            if ui.selectable_value(&mut self.s.hotkey_mods, *bits, *name).changed() {
+                                                self.s.save();
+                                            }
+                                        }
+                                    });
+                                    ui.label(RichText::new(tr("+ Q, O, R, F, C, P, V, M")).size(11.5).color(t::MUTED));
+                                });
                             });
                             t::card().show(l, |ui| {
                                 ui.set_width(ui.available_width());
                                 t::section(ui, &tr("Hosting quality"));
                                 restart_host |= t::switch(ui, &mut self.s.hardware, &tr("Hardware encoding (GPU)"));
+                                restart_host |= t::switch(ui, &mut self.s.record_sessions, &tr("Record sessions on this PC (Videos\\Kinlink)"));
                                 ui.horizontal(|ui| {
                                     ui.label(RichText::new(tr("Max fps")).color(t::SOFT));
                                     egui::ComboBox::from_id_salt("fps").selected_text(format!("{}", self.s.fps)).show_ui(ui, |ui| {
@@ -2117,8 +2243,14 @@ impl App {
             });
             if self.expanded == Some(f.public) {
                 let mut g = f.clone();
+                let mut ask = false;
                 egui::Frame::NONE.fill(t::BG).stroke(egui::Stroke::new(1.0, t::LINE)).corner_radius(12.0).inner_margin(egui::Margin::same(14)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(online, egui::Button::new(tr("Ask them for help"))).on_hover_text(tr("They get a notification; when they connect within 15 minutes they get full control without asking.")).clicked() {
+                            ask = true;
+                        }
+                    });
                     ui.columns(2, |c| {
                         let ui = &mut c[0];
                         ui.label(RichText::new(tr("Nickname")).size(12.0).color(t::SOFT));
@@ -2145,6 +2277,16 @@ impl App {
                             .on_hover_text(tr("Same code on both screens = you're really talking to each other"));
                     });
                 });
+                if ask {
+                    if self.host.is_none() {
+                        self.toast(tl("Turn on \"Let friends connect\" on This PC first."));
+                    } else {
+                        sig.ask_help(&f.public);
+                        self.help_asked.retain(|(p, _)| *p != f.public);
+                        self.help_asked.push((f.public, Instant::now()));
+                        self.toast(tlf("Asked {} for help. When they connect, they get full control.", &[&f.display()]));
+                    }
+                }
                 if g != f {
                     if let Some(h) = &self.host {
                         h.set_perms(&g.id(), Perms { mouse: g.allow_mouse, keyboard: g.allow_keyboard, gamepad: g.allow_gamepad });
