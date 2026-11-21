@@ -24,11 +24,15 @@ pub struct Settings {
     pub notify_online: bool,
     /// Interface language: "en", "ar", or "" = follow Windows.
     pub language: String,
+    /// My status line shown to friends.
+    pub status: String,
+    /// Ask before accepting incoming files.
+    pub ask_files: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { hosting: true, port: crate::proto::DEFAULT_PORT, max_mbps: 30, fps: 60, hardware: true, upnp: true, autostart_init: false, fullscreen_connect: true, hint_seen: false, notify_online: true, language: String::new() }
+        Self { hosting: true, port: crate::proto::DEFAULT_PORT, max_mbps: 30, fps: 60, hardware: true, upnp: true, autostart_init: false, fullscreen_connect: true, hint_seen: false, notify_online: true, language: String::new(), status: String::new(), ask_files: true }
     }
 }
 

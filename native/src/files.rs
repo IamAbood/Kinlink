@@ -2,6 +2,12 @@
 //! cumulative + bitmap acks, and resends. Used by both host and client.
 use crate::proto::Msg;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+
+/// Ask before accepting incoming files (Settings > General). Offers wait for Accept/Decline.
+pub static ASK: AtomicBool = AtomicBool::new(false);
+/// Unanswered offers decline themselves after this long.
+const OFFER_TIMEOUT: Duration = Duration::from_secs(120);
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -35,6 +41,8 @@ struct Out {
     sent: HashMap<u64, Instant>,
     started: Instant,
     finished: bool,
+    /// The receiver has answered (acked) at least once; until then only a trickle is sent.
+    got_ack: bool,
 }
 
 struct In {
@@ -56,6 +64,10 @@ pub struct Transfers {
     out: HashMap<u32, Out>,
     inc: HashMap<u32, In>,
     finished: Vec<Progress>,
+    /// Offers waiting for the user to accept (id, name, size, when).
+    pending: Vec<(u32, String, u64, Instant)>,
+    /// Overrides ASK for this transfer set (tests).
+    pub ask: Option<bool>,
     /// Where received files go (Downloads\Kinlink by default).
     pub save_dir: Option<PathBuf>,
 }
@@ -113,7 +125,7 @@ impl Transfers {
         let id = self.next_id;
         let name = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "file".into());
         let chunks = chunks_for(size);
-        self.out.insert(id, Out { name: name.clone(), size, file, chunks, base: 0, acked: vec![false; chunks as usize], sent: HashMap::new(), started: Instant::now(), finished: false });
+        self.out.insert(id, Out { name: name.clone(), size, file, chunks, base: 0, acked: vec![false; chunks as usize], sent: HashMap::new(), started: Instant::now(), finished: false, got_ack: false });
         Ok(Msg::FileOffer { id, name, size })
     }
 
@@ -121,16 +133,14 @@ impl Transfers {
     pub fn on_msg(&mut self, m: Msg) -> Vec<Msg> {
         match m {
             Msg::FileOffer { id, name, size } => {
-                if self.inc.contains_key(&id) {
+                if self.inc.contains_key(&id) || self.pending.iter().any(|p| p.0 == id) {
                     return vec![];
                 }
-                let Some(dir) = self.save_dir.clone().or_else(default_save_dir) else { return vec![Msg::FileCancel { id }] };
-                let _ = std::fs::create_dir_all(&dir);
-                let Some((path, file)) = create_unique(&dir, &name) else { return vec![Msg::FileCancel { id }] };
-                let _ = file.set_len(size);
-                let chunks = chunks_for(size);
-                self.inc.insert(id, In { name, size, path, file, chunks, have: vec![false; chunks as usize], have_until: 0, since_ack: 0, last_ack: Instant::now(), finished: false });
-                vec![self.ack(id)]
+                if self.ask.unwrap_or_else(|| ASK.load(Relaxed)) {
+                    self.pending.push((id, name, size, Instant::now()));
+                    return vec![];
+                }
+                self.start_receiving(id, name, size)
             }
             Msg::FileChunk { id, idx, data } => {
                 let Some(t) = self.inc.get_mut(&id) else { return vec![] };
@@ -158,6 +168,7 @@ impl Transfers {
             }
             Msg::FileAck { id, have_until, bits } => {
                 let Some(t) = self.out.get_mut(&id) else { return vec![] };
+                t.got_ack = true;
                 for i in t.base..have_until.min(t.chunks) {
                     t.acked[i as usize] = true;
                 }
@@ -177,6 +188,7 @@ impl Transfers {
                 vec![]
             }
             Msg::FileCancel { id } => {
+                self.pending.retain(|p| p.0 != id);
                 if let Some(t) = self.out.remove(&id) {
                     self.finished.push(Progress { id, name: t.name, sending: true, done: 0, size: t.size, finished: false, failed: Some("cancelled by the other side".into()), path: None });
                 }
@@ -190,6 +202,34 @@ impl Transfers {
             }
             _ => vec![],
         }
+    }
+
+    fn start_receiving(&mut self, id: u32, name: String, size: u64) -> Vec<Msg> {
+        let Some(dir) = self.save_dir.clone().or_else(default_save_dir) else { return vec![Msg::FileCancel { id }] };
+        let _ = std::fs::create_dir_all(&dir);
+        let Some((path, file)) = create_unique(&dir, &name) else { return vec![Msg::FileCancel { id }] };
+        let _ = file.set_len(size);
+        let chunks = chunks_for(size);
+        self.inc.insert(id, In { name, size, path, file, chunks, have: vec![false; chunks as usize], have_until: 0, since_ack: 0, last_ack: Instant::now(), finished: false });
+        vec![self.ack(id)]
+    }
+
+    /// Offers waiting for Accept/Decline: (id, name, size).
+    pub fn pending(&self) -> Vec<(u32, String, u64)> {
+        self.pending.iter().map(|p| (p.0, p.1.clone(), p.2)).collect()
+    }
+
+    /// The user accepted an offer: start receiving (returns replies to send).
+    pub fn accept(&mut self, id: u32) -> Vec<Msg> {
+        let Some(i) = self.pending.iter().position(|p| p.0 == id) else { return vec![] };
+        let (id, name, size, _) = self.pending.remove(i);
+        self.start_receiving(id, name, size)
+    }
+
+    /// The user declined an offer.
+    pub fn decline(&mut self, id: u32) -> Msg {
+        self.pending.retain(|p| p.0 != id);
+        Msg::FileCancel { id }
     }
 
     fn ack(&mut self, id: u32) -> Msg {
@@ -209,13 +249,20 @@ impl Transfers {
     /// Call every few ms: returns chunks (and periodic acks) to send now.
     pub fn pump(&mut self) -> Vec<Msg> {
         let mut out = Vec::new();
+        // Offers nobody answered: decline them.
+        let expired: Vec<u32> = self.pending.iter().filter(|p| p.3.elapsed() > OFFER_TIMEOUT).map(|p| p.0).collect();
+        for id in expired {
+            out.push(self.decline(id));
+        }
         for (&id, t) in self.out.iter_mut().filter(|(_, t)| !t.finished) {
-            let end = (t.base + WINDOW).min(t.chunks);
+            // Until the receiver answers (it may be asking its user), only a trickle.
+            let (window, resend) = if t.got_ack { (WINDOW, RESEND_AFTER) } else { (4, Duration::from_secs(1)) };
+            let end = (t.base + window).min(t.chunks);
             for i in t.base..end {
                 if out.len() >= MAX_PER_PUMP {
                     break;
                 }
-                if t.acked[i as usize] || t.sent.get(&i).is_some_and(|s| s.elapsed() < RESEND_AFTER) {
+                if t.acked[i as usize] || t.sent.get(&i).is_some_and(|s| s.elapsed() < resend) {
                     continue;
                 }
                 let len = (t.size - i * CHUNK as u64).min(CHUNK as u64) as usize;
@@ -322,5 +369,22 @@ mod tests {
         let d = std::env::temp_dir();
         assert_eq!(free_name(&d, "..\\..\\evil.exe").file_name().unwrap(), "evil.exe");
         assert!(free_name(&d, "a<b>.txt").to_string_lossy().ends_with("a_b_.txt"));
+    }
+
+    #[test]
+    fn ask_before_receiving() {
+        let dir = std::env::temp_dir().join(format!("pclone-ask-{}", std::process::id()));
+        let src = dir.join("hello.txt");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&src, b"hi there").unwrap();
+        let (mut a, mut b) = (Transfers::default(), Transfers { save_dir: Some(dir.join("in")), ask: Some(true), ..Default::default() });
+        let offer = a.send(&src).unwrap();
+        assert!(b.on_msg(offer).is_empty(), "no reply until the user decides");
+        assert_eq!(b.pending().len(), 1);
+        assert!(a.pump().len() <= 4, "sender only trickles before an answer");
+        let replies = b.accept(b.pending()[0].0);
+        assert!(matches!(replies[0], Msg::FileAck { .. }));
+        assert!(b.pending().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

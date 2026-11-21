@@ -582,6 +582,10 @@ fn signaltest() -> i32 {
     if !wait("A sees B online", 20, &|| a.friends().iter().any(|(_, on)| *on)) {
         return 1;
     }
+    a.set_status("Busy");
+    if !wait("B sees A's status", 20, &|| b.status_of(&apub) == "Busy") {
+        return 1;
+    }
     let bpub = a.friends()[0].0.public;
     a.send(&bpub, Sig::Connect { req: 9, eph: [1; 32], addrs: vec!["203.0.113.1:5000".parse().unwrap()] });
     let got = std::sync::Mutex::new(false);

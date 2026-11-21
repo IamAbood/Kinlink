@@ -233,6 +233,19 @@ impl Client {
         let m = self.sh.files.lock().unwrap().cancel(id);
         self.sh.send(&m);
     }
+    /// Files the host offered that wait for Accept/Decline: (id, name, size).
+    pub fn pending_files(&self) -> Vec<(u32, String, u64)> {
+        self.sh.files.lock().unwrap().pending()
+    }
+    pub fn answer_file(&self, id: u32, accept: bool) {
+        let msgs = {
+            let mut f = self.sh.files.lock().unwrap();
+            if accept { f.accept(id) } else { vec![f.decline(id)] }
+        };
+        for m in msgs {
+            self.sh.send(&m);
+        }
+    }
     pub fn transfers(&self) -> Vec<Progress> {
         self.sh.files.lock().unwrap().active()
     }

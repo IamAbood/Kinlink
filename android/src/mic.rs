@@ -26,3 +26,21 @@ pub fn ensure_mic() -> bool {
         false
     })
 }
+
+/// Opens a web link in the phone's browser (Android Intent.ACTION_VIEW).
+pub fn open_url(url: &str) {
+    let ctx = ndk_context::android_context();
+    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) };
+    let r: Result<(), jni::errors::Error> = vm.attach_current_thread(|env| {
+        let activity = unsafe { JObject::from_raw(env, ctx.context().cast()) };
+        let jurl = env.new_string(url)?;
+        let uri = env.call_static_method(jni_str!("android/net/Uri"), jni_str!("parse"), jni_sig!("(Ljava/lang/String;)Landroid/net/Uri;"), &[JValue::Object(&jurl)])?.l()?;
+        let action = env.new_string("android.intent.action.VIEW")?;
+        let intent = env.new_object(jni_str!("android/content/Intent"), jni_sig!("(Ljava/lang/String;Landroid/net/Uri;)V"), &[JValue::Object(&action), JValue::Object(&uri)])?;
+        env.call_method(&activity, jni_str!("startActivity"), jni_sig!("(Landroid/content/Intent;)V"), &[JValue::Object(&intent)])?;
+        Ok(())
+    });
+    if let Err(e) = r {
+        log::error!("open url: {e}");
+    }
+}

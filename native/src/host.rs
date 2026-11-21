@@ -292,6 +292,21 @@ impl Host {
         Ok(sent)
     }
 
+    /// Files guests offered that wait for Accept/Decline: (guest, id, name, size).
+    pub fn pending_files(&self) -> Vec<(String, u32, String, u64)> {
+        let sh = &self.r.0;
+        sh.sessions.lock().unwrap().iter().flat_map(|s| s.files.pending().into_iter().map(move |(id, n, sz)| (s.name.clone(), id, n, sz))).collect()
+    }
+    pub fn answer_file(&self, guest: &str, id: u32, accept: bool) {
+        let sh = &self.r.0;
+        for s in sh.sessions.lock().unwrap().iter_mut().filter(|s| s.name == guest) {
+            let msgs = if accept { s.files.accept(id) } else { vec![s.files.decline(id)] };
+            for m in msgs {
+                let _ = sh.socks[s.sock].send_to(&s.cipher.seal(&encode(&m)), s.addr);
+            }
+        }
+    }
+
     pub fn cancel_file(&self, guest: &str, id: u32) {
         let sh = &self.r.0;
         for s in sh.sessions.lock().unwrap().iter_mut().filter(|s| s.name == guest) {

@@ -62,6 +62,8 @@ pub enum Sig {
     Cancel { req: u64 },
     /// "I'm now <name>" (same key, so the tag follows from it).
     Renamed { name: String },
+    /// My status line ("" = available, "Busy", "Playing FIFA", ...).
+    Status { text: String },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -126,6 +128,8 @@ struct State {
     outgoing: Vec<Outgoing>,
     seen: HashMap<u64, Instant>,
     up: Vec<bool>,
+    /// Friends' status lines.
+    status: HashMap<Pub, String>,
 }
 
 struct Inner {
@@ -136,6 +140,7 @@ struct Inner {
     events: Mutex<VecDeque<Event>>,
     wake: Box<dyn Fn() + Send + Sync>,
     stop: AtomicBool,
+    my_status: Mutex<String>,
 }
 
 #[derive(Clone)]
@@ -194,6 +199,7 @@ impl Signal {
             events: Mutex::new(VecDeque::new()),
             wake: Box::new(wake),
             stop: AtomicBool::new(false),
+            my_status: Mutex::new(String::new()),
         }));
         for i in 0..BROKERS.len() {
             let s2 = s.clone();
@@ -215,6 +221,21 @@ impl Signal {
         let st = self.0.st.lock().unwrap();
         st.friends.iter().map(|f| (f.clone(), st.last_seen.get(&f.public).is_some_and(|t| t.elapsed() < ONLINE_FOR))).collect()
     }
+    /// A friend's status line ("" = none).
+    pub fn status_of(&self, public: &Pub) -> String {
+        self.0.st.lock().unwrap().status.get(public).cloned().unwrap_or_default()
+    }
+
+    /// Sets my status and tells every friend.
+    pub fn set_status(&self, text: &str) {
+        let text: String = text.trim().chars().take(40).collect();
+        *self.0.my_status.lock().unwrap() = text.clone();
+        let pubs: Vec<Pub> = self.0.st.lock().unwrap().friends.iter().map(|f| f.public).collect();
+        for p in pubs {
+            self.send(&p, Sig::Status { text: text.clone() });
+        }
+    }
+
     pub fn friend(&self, public: &Pub) -> Option<Friend> {
         self.0.st.lock().unwrap().friends.iter().find(|f| &f.public == public).cloned()
     }
@@ -559,6 +580,10 @@ impl Signal {
                 if reply {
                     self.send(&from, Sig::Ping { reply: false });
                 }
+                if reply || !was_online {
+                    let text = self.0.my_status.lock().unwrap().clone();
+                    self.send(&from, Sig::Status { text });
+                }
                 if !was_online {
                     self.event(Event::FriendOnline(from));
                 }
@@ -570,6 +595,11 @@ impl Signal {
             Sig::Connect { req, eph, addrs } => self.event(Event::IncomingConnect { from, req, eph, addrs }),
             s @ (Sig::ConnectOk { .. } | Sig::ConnectNo { .. }) => self.event(Event::ConnectReply { from, sig: s }),
             Sig::Cancel { req } => self.event(Event::Cancelled { from, req }),
+            Sig::Status { text } => {
+                let text: String = text.chars().filter(|c| !c.is_control()).take(40).collect();
+                self.0.st.lock().unwrap().status.insert(from, text);
+                (self.0.wake)();
+            }
             Sig::Renamed { name } => {
                 if !crypto::valid_name(&name) {
                     return;

@@ -116,6 +116,11 @@ pub struct App {
     add_err: Option<String>,
     rename_text: String,
     page: Page,
+    /// Custom status being typed (None = not editing).
+    status_edit: Option<String>,
+    /// Session history: finished sessions (newest last) and the ones running now.
+    history: Vec<HistEntry>,
+    live_sessions: std::collections::HashMap<String, (String, Instant)>,
     rename_err: Option<String>,
     expanded: Option<Pub>,
     streaming: bool,
@@ -185,6 +190,9 @@ impl App {
             add_err: None,
             rename_text: String::new(),
             page: Page::Friends,
+            status_edit: None,
+            history: load_history(),
+            live_sessions: Default::default(),
             rename_err: None,
             expanded: None,
             streaming: false,
@@ -251,7 +259,10 @@ impl App {
 
     fn start_services(&mut self, id: Identity) {
         let store = settings::data_dir().map(|d| d.join("friends.json"));
-        self.signal = Some(Signal::start(id, store, self.waker()));
+        let sig = Signal::start(id, store, self.waker());
+        sig.set_status(&self.s.status);
+        self.signal = Some(sig);
+        crate::files::ASK.store(self.s.ask_files, std::sync::atomic::Ordering::Relaxed);
         self.signal_started = Instant::now();
         if !self.s.autostart_init && settings::profile().is_none() {
             // New install: start with Windows by default (can be turned off in settings).
@@ -358,7 +369,9 @@ impl App {
                     s.shutdown();
                 }
                 let store = settings::data_dir().map(|d| d.join("friends.json"));
-                self.signal = Some(Signal::start(new, store, self.waker()));
+                let sig = Signal::start(new, store, self.waker());
+                sig.set_status(&self.s.status);
+                self.signal = Some(sig);
                 self.rename_err = None;
                 self.rename_text.clear();
                 self.toast(tlf("You're now {}. Friends keep you; give new people this ID.", &[&id]));
@@ -672,6 +685,9 @@ impl App {
             }
             if !self.streaming {
                 self.popup_ui(ui.ctx());
+            }
+            {
+                self.file_offers_ui(ui.ctx());
             }
         });
         if self.streaming {
@@ -1282,6 +1298,35 @@ impl App {
                             ui.label(RichText::new(name).font(egui::FontId::new(14.0, t::bold())));
                             ui.label(RichText::new(format!("#{tag}")).font(egui::FontId::new(14.0, t::bold())).color(t::ACCENT_SOFT));
                         });
+                        // My status, shown to friends.
+                        let presets = ["", "Busy", "Away", "In a game"];
+                        let shown = if self.s.status.is_empty() { tr("Available") } else { crate::rtl::show(&crate::i18n::tl(&self.s.status)) };
+                        let mut pick: Option<String> = None;
+                        egui::ComboBox::from_id_salt("status").width(ui.available_width() - 4.0).selected_text(shown).show_ui(ui, |ui| {
+                            for p in presets {
+                                let label = if p.is_empty() { tr("Available") } else { tr(p) };
+                                if ui.selectable_label(self.s.status == p, label).clicked() {
+                                    pick = Some(p.to_string());
+                                }
+                            }
+                            if ui.selectable_label(false, tr("Custom…")).clicked() {
+                                self.status_edit = Some(self.s.status.clone());
+                            }
+                        });
+                        if let Some(text) = &mut self.status_edit {
+                            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            let r = ui.add(egui::TextEdit::singleline(text).hint_text(tr("e.g. Playing FIFA")).desired_width(ui.available_width()).char_limit(40));
+                            r.request_focus();
+                            if enter || r.lost_focus() {
+                                pick = Some(text.clone());
+                            }
+                        }
+                        if let Some(p) = pick {
+                            self.status_edit = None;
+                            self.s.status = p.trim().to_string();
+                            self.s.save();
+                            sig.set_status(&self.s.status);
+                        }
                         ui.horizontal(|ui| {
                             let (c, text) = if sig.online() {
                                 (t::MINT, if self.host.is_some() { tr("Online · hosting on") } else { tr("Online · hosting off") })
@@ -1548,6 +1593,38 @@ impl App {
                         if let Some(e) = &self.host_err {
                             ui.colored_label(t::DANGER, crate::rtl::show(e));
                         }
+                        ui.horizontal(|ui| {
+                            t::section(ui, &tr("Recent sessions"));
+                            if !self.history.is_empty() {
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.small_button(tr("Clear")).clicked() {
+                                        self.history.clear();
+                                        save_history(&self.history);
+                                    }
+                                });
+                            }
+                        });
+                        t::card().show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            let live: Vec<(String, String, u64)> = self.live_sessions.iter().map(|(g, (start, at))| (g.clone(), start.clone(), at.elapsed().as_secs())).collect();
+                            if live.is_empty() && self.history.is_empty() {
+                                ui.label(RichText::new(tr("Nobody has connected yet")).color(t::MUTED));
+                            }
+                            for (g, start, secs) in &live {
+                                ui.horizontal(|ui| {
+                                    dot(ui, t::MINT);
+                                    ui.label(RichText::new(g).font(egui::FontId::new(13.5, t::bold())));
+                                    ui.label(RichText::new(trf("{} · connected now ({})", &[start, &duration_text(*secs)])).size(12.0).color(t::MINT_SOFT));
+                                });
+                            }
+                            for h in self.history.iter().rev().take(15) {
+                                ui.horizontal(|ui| {
+                                    dot(ui, t::LINE2);
+                                    ui.label(RichText::new(&h.guest).font(egui::FontId::new(13.5, t::bold())));
+                                    ui.label(RichText::new(format!("{} · {}", h.start, duration_text(h.secs))).size(12.0).color(t::MUTED));
+                                });
+                            }
+                        });
                     }
 
                     // ---------------------------------------- Files
@@ -1651,6 +1728,10 @@ impl App {
                                     self.s.save();
                                 }
                                 if t::switch(ui, &mut self.s.fullscreen_connect, &tr("Fullscreen when connecting")) {
+                                    self.s.save();
+                                }
+                                if t::switch(ui, &mut self.s.ask_files, &tr("Ask before receiving files")) {
+                                    crate::files::ASK.store(self.s.ask_files, std::sync::atomic::Ordering::Relaxed);
                                     self.s.save();
                                 }
                             });
@@ -1786,7 +1867,9 @@ impl App {
                             ui.label(RichText::new(f.id()).size(12.5).color(t::MUTED));
                         }
                     });
-                    ui.label(RichText::new(if online { tr("Online") } else { tr("Offline") }).size(12.0).color(if online { t::MINT_SOFT } else { t::MUTED }));
+                    let status = sig.status_of(&f.public);
+                    let line = if !online { tr("Offline") } else if status.is_empty() { tr("Online") } else { trf("Online · {}", &[&crate::i18n::tl(&status)]) };
+                    ui.label(RichText::new(line).size(12.0).color(if online { t::MINT_SOFT } else { t::MUTED }));
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let open = self.expanded == Some(f.public);
@@ -2074,6 +2157,7 @@ Updating the graphics driver usually fixes this.");
     }
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        self.track_sessions();
         let picked = self.picked.lock().unwrap().take();
         if let Some(p) = picked {
             self.send_path(&p);
@@ -2270,3 +2354,133 @@ fn open_url(url: &str) {
     let _ = std::process::Command::new("explorer").arg(url).spawn();
 }
 
+
+// ---------------------------------------------------------------- session history
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct HistEntry {
+    guest: String,
+    start: String,
+    secs: u64,
+}
+
+fn history_path() -> Option<std::path::PathBuf> {
+    Some(settings::data_dir()?.join("history.json"))
+}
+
+fn load_history() -> Vec<HistEntry> {
+    history_path().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+fn save_history(h: &[HistEntry]) {
+    if let Some(p) = history_path() {
+        let _ = std::fs::write(p, serde_json::to_string(h).unwrap_or_default());
+    }
+}
+
+/// "21 Nov 16:43" in local time.
+fn local_now() -> String {
+    let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    const M: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    format!("{} {} {:02}:{:02}", t.wDay, M[(t.wMonth as usize).clamp(1, 12) - 1], t.wHour, t.wMinute)
+}
+
+fn duration_text(secs: u64) -> String {
+    if secs < 60 {
+        trf("{} s", &[&secs.to_string()])
+    } else if secs < 3600 {
+        trf("{} min", &[&(secs / 60).to_string()])
+    } else {
+        trf("{} h {} min", &[&(secs / 3600).to_string(), &(secs % 3600 / 60).to_string()])
+    }
+}
+
+fn human_size(b: u64) -> String {
+    match b {
+        0..1_000_000 => format!("{:.0} KB", b as f64 / 1e3),
+        1_000_000..1_000_000_000 => format!("{:.1} MB", b as f64 / 1e6),
+        _ => format!("{:.2} GB", b as f64 / 1e9),
+    }
+}
+
+impl App {
+    /// Notices guests joining and leaving (for "Recent sessions").
+    fn track_sessions(&mut self) {
+        let now: Vec<String> = self.host.as_ref().map(|h| h.status().clients).unwrap_or_default();
+        for g in &now {
+            if !self.live_sessions.contains_key(g) {
+                self.live_sessions.insert(g.clone(), (local_now(), Instant::now()));
+            }
+        }
+        let gone: Vec<String> = self.live_sessions.keys().filter(|g| !now.contains(g)).cloned().collect();
+        for g in gone {
+            if let Some((start, at)) = self.live_sessions.remove(&g) {
+                self.history.push(HistEntry { guest: g, start, secs: at.elapsed().as_secs() });
+                if self.history.len() > 200 {
+                    self.history.remove(0);
+                }
+                save_history(&self.history);
+            }
+        }
+    }
+
+    /// "X wants to send you a file" cards (as host and during a session).
+    fn file_offers_ui(&mut self, ctx: &egui::Context) {
+        use crate::theme as t;
+        let mut offers: Vec<(Option<String>, u32, String, u64)> = Vec::new();
+        if let Some(h) = &self.host {
+            offers.extend(h.pending_files().into_iter().map(|(g, id, n, sz)| (Some(g), id, n, sz)));
+        }
+        if let Some(c) = &self.client {
+            offers.extend(c.pending_files().into_iter().map(|(id, n, sz)| (None, id, n, sz)));
+        }
+        if offers.is_empty() {
+            return;
+        }
+        let mut answer: Option<(Option<String>, u32, bool)> = None;
+        let base = self.popups.len() as f32 * 170.0;
+        for (i, (from, id, name, size)) in offers.iter().enumerate() {
+            let who = from.clone().unwrap_or_else(|| self.peer.clone());
+            egui::Window::new("file offer")
+                .id(egui::Id::new(("offer", from.clone(), *id)))
+                .title_bar(false)
+                .collapsible(false)
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(Color32::from_rgb(0x16, 0x1F, 0x3A)).stroke(egui::Stroke::new(1.0, t::ACCENT_LINE)).corner_radius(16.0).inner_margin(egui::Margin::same(16)))
+                .anchor(egui::Align2::RIGHT_BOTTOM, [-24.0, -24.0 - base - i as f32 * 150.0])
+                .show(ctx, |ui| {
+                    ui.set_width(300.0);
+                    ui.horizontal(|ui| {
+                        let (r, _) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
+                        t::icon(ui.painter(), r, t::Icon::Files, t::ACCENT_SOFT);
+                        ui.label(RichText::new(trf("{} wants to send you a file", &[&who])).font(egui::FontId::new(14.0, t::bold())));
+                    });
+                    ui.label(RichText::new(format!("{} · {}", crate::rtl::show(name), human_size(*size))).color(t::SOFT));
+                    ui.label(RichText::new(tr("Saved to Downloads\\Kinlink if you accept")).size(11.5).color(t::MUTED));
+                    ui.horizontal(|ui| {
+                        if t::primary(ui, &tr("Accept"), None, true).clicked() {
+                            answer = Some((from.clone(), *id, true));
+                        }
+                        if ui.add(egui::Button::new(tr("Decline")).min_size(egui::vec2(100.0, 36.0))).clicked() {
+                            answer = Some((from.clone(), *id, false));
+                        }
+                    });
+                });
+        }
+        if let Some((from, id, yes)) = answer {
+            match from {
+                Some(g) => {
+                    if let Some(h) = &self.host {
+                        h.answer_file(&g, id, yes);
+                    }
+                }
+                None => {
+                    if let Some(c) = &self.client {
+                        c.answer_file(id, yes);
+                    }
+                }
+            }
+        }
+        ctx.request_repaint_after(Duration::from_millis(500));
+    }
+}

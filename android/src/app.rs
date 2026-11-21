@@ -59,6 +59,8 @@ pub struct App {
     menu: bool,
     keyboard: bool,
     muted: bool,
+    /// A newer release tag found on GitHub.
+    update: Arc<Mutex<Option<String>>>,
     cursor: (f32, f32),
     g: Gesture,
 }
@@ -81,6 +83,7 @@ impl App {
             menu: false,
             keyboard: false,
             muted: false,
+            update: Arc::new(Mutex::new(None)),
             cursor: (0.5, 0.5),
             g: Gesture::default(),
         };
@@ -92,6 +95,7 @@ impl App {
         if let Some(id) = Identity::load() {
             app.start_signal(id);
         }
+        check_for_update(app.update.clone(), app.waker());
         app
     }
 
@@ -438,6 +442,16 @@ or have permission to use."), 11.5, t::MUTED);
                     });
                     ui.label(RichText::new(if sig.online() { "Online" } else { "Connecting…" }).size(12.0).color(if sig.online() { t::MINT_SOFT } else { t::MUTED }));
                 });
+                let newer = self.update.lock().unwrap().clone();
+                if let Some(tag) = newer {
+                    egui::Frame::NONE.fill(egui::Color32::from_rgb(0x10, 0x26, 0x1E)).stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(0x1F, 0x4D, 0x3B))).corner_radius(12.0).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(RichText::new(trf("Kinlink {} is available", &[&tag])).font(egui::FontId::new(14.0, t::bold())).color(t::MINT_SOFT));
+                        if t::primary(ui, &tr("Download"), Some(Icon::Update), true).clicked() {
+                            crate::mic::open_url("https://github.com/IamAbood/Kinlink/releases/latest/download/Kinlink.apk");
+                        }
+                    });
+                }
                 if let Some(m) = &self.message {
                     ui.colored_label(egui::Color32::from_rgb(0xFF, 0xC9, 0x8A), crate::rtl::show(m));
                 }
@@ -791,4 +805,23 @@ fn language_switch(ui: &mut egui::Ui) {
             let _ = std::fs::write(p, if on { "ar" } else { "en" });
         }
     }
+}
+
+/// Asks GitHub for the newest release; fills `slot` if it's newer than this app.
+fn check_for_update(slot: Arc<Mutex<Option<String>>>, wake: impl Fn() + Send + 'static) {
+    std::thread::spawn(move || {
+        let Ok(mut resp) = ureq::get("https://api.github.com/repos/IamAbood/Kinlink/releases/latest").header("User-Agent", "Kinlink-Android").call() else { return };
+        let Ok(body) = resp.body_mut().read_to_string() else { return };
+        let Ok(j) = serde_json::from_str::<serde_json::Value>(&body) else { return };
+        let Some(tag) = j["tag_name"].as_str() else { return };
+        if version_key(tag) > version_key(env!("CARGO_PKG_VERSION")) {
+            *slot.lock().unwrap() = Some(tag.trim_start_matches('v').to_string());
+            wake();
+        }
+    });
+}
+
+/// "v0.17.0-beta" -> [0, 17, 0]
+fn version_key(v: &str) -> Vec<u32> {
+    v.trim_start_matches('v').split(['-', '+']).next().unwrap_or("").split('.').map(|n| n.parse().unwrap_or(0)).collect()
 }
