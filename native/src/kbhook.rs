@@ -94,6 +94,43 @@ fn window_exe(hwnd: isize) -> String {
     }
 }
 
+/// "Windows 10.0 build 19045 (22H2), elevated: false": what matters for who gets keyboard input.
+fn system_info() -> String {
+    use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    let reg = |name: &str| unsafe {
+        let (mut buf, mut len) = ([0u16; 64], 128u32);
+        let ok = RegGetValueW(HKEY_LOCAL_MACHINE, windows::core::w!("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"), &windows::core::HSTRING::from(name), RRF_RT_REG_SZ, None, Some(buf.as_mut_ptr() as _), Some(&mut len)).is_ok();
+        if ok { String::from_utf16_lossy(&buf[..(len as usize / 2).saturating_sub(1)]) } else { "?".into() }
+    };
+    let elevated = unsafe {
+        let mut tok = windows::Win32::Foundation::HANDLE::default();
+        let mut e = TOKEN_ELEVATION::default();
+        let mut n = 0;
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut tok).is_ok() && GetTokenInformation(tok, TokenElevation, Some(&mut e as *mut _ as _), std::mem::size_of::<TOKEN_ELEVATION>() as u32, &mut n).is_ok() && e.TokenIsElevated != 0
+    };
+    format!("Windows build {} ({}), elevated: {elevated}", reg("CurrentBuild"), reg("DisplayVersion"))
+}
+
+/// At session start with our window in front: press F24 (no real keyboard has it) and log
+/// whether the hook saw it. Tells "hook blocked for our window" apart from everything else.
+pub fn self_test() {
+    std::thread::spawn(|| unsafe {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_F24};
+        std::thread::sleep(std::time::Duration::from_millis(800)); // the fresh hook is in place
+        if !ours_in_front() {
+            return crate::plog!("keyboard: self-test skipped (Kinlink not in front); {}", system_info());
+        }
+        let before = CALLS.load(Relaxed);
+        let key = |flags| INPUT { r#type: INPUT_KEYBOARD, Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VK_F24, wScan: 0x76, dwFlags: flags, time: 0, dwExtraInfo: 0 } } };
+        SendInput(&[key(Default::default()), key(KEYEVENTF_KEYUP)], std::mem::size_of::<INPUT>() as i32);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let seen = CALLS.load(Relaxed) - before;
+        crate::plog!("keyboard: self-test with Kinlink in front: hook saw {seen} of 2 test keys ({}); {}", if seen >= 2 { "OK" } else { "BLOCKED" }, system_info());
+    });
+}
+
 /// Logs the installed antivirus / security products once: they are what usually blocks the hook.
 pub fn log_security_software() {
     static ONCE: std::sync::Once = std::sync::Once::new();
@@ -132,7 +169,7 @@ pub fn install(hwnd: HWND, wake: impl Fn() + Send + 'static) -> Receiver<KeyEv> 
             Ok(h) => h,
             Err(e) => return crate::plog!("keyboard hook failed: {e}"),
         };
-        crate::plog!("keyboard: hook installed");
+        crate::plog!("keyboard: hook installed ({})", system_info());
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             if msg.message == WM_APP_REHOOK {

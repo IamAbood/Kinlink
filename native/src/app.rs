@@ -607,6 +607,7 @@ impl App {
         self.message = None;
         kbhook::set_active(true);
         kbhook::rehook();
+        kbhook::self_test();
         self.show_hint = !self.s.hint_seen;
         if !self.s.hint_seen {
             self.s.hint_seen = true;
