@@ -23,13 +23,11 @@ jobs:
       - name: Rust toolchain
         run: rustup toolchain install stable --profile minimal && rustup default stable
 
-      - uses: actions/cache@v4
+      # Restores the last cache even when Cargo.lock changed (every version bump does), so only
+      # changed crates are rebuilt.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            native/target
-          key: cargo-${{ hashFiles('native/Cargo.lock') }}
+          workspaces: native
 
       - name: Unit tests
         run: cargo test --release --manifest-path native/Cargo.toml
