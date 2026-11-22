@@ -139,7 +139,12 @@ pub fn swap(r: &Release, progress: impl Fn(f32)) -> Result<()> {
     }
     // Windows lets a running exe be renamed (not overwritten): park the old one, move the new in.
     let old = old_path(&exe);
-    let _ = std::fs::remove_file(&old);
+    if std::fs::remove_file(&old).is_err() && old.exists() {
+        // Still running (the helper service keeps its exe open until a reboot): park it under
+        // another name; after_update deletes it once it's free.
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let _ = std::fs::rename(&old, exe.with_extension(format!("exe.old{stamp}")));
+    }
     std::fs::rename(&exe, &old).context("couldn't move the old version aside")?;
     if let Err(e) = std::fs::rename(&tmp, &exe) {
         let _ = std::fs::rename(&old, &exe); // put it back
@@ -158,8 +163,14 @@ pub fn after_update(args: &[String]) {
             }
         }
     }
+    // Delete every leftover old copy that's no longer running (Kinlink.exe.old, Kinlink.exe.old<time>).
     if let Ok(exe) = exe() {
-        let _ = std::fs::remove_file(old_path(&exe));
+        let name = format!("{}.old", exe.file_name().unwrap_or_default().to_string_lossy().to_lowercase());
+        for f in exe.parent().and_then(|d| std::fs::read_dir(d).ok()).into_iter().flatten().flatten() {
+            if f.file_name().to_string_lossy().to_lowercase().starts_with(&name) {
+                let _ = std::fs::remove_file(f.path());
+            }
+        }
     }
 }
 
