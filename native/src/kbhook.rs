@@ -31,7 +31,13 @@ unsafe extern "system" fn proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
             let k = &*(lp.0 as *const KBDLLHOOKSTRUCT);
             crate::plog!("HOOK scan={:#x} active={} fg_match={} injected={}", k.scanCode, ACTIVE.load(Relaxed), GetForegroundWindow().0 as isize == HWND_VAL.load(Relaxed), k.flags.0 & LLKHF_INJECTED.0 != 0);
         }
-        if code >= 0 && ACTIVE.load(Relaxed) && GetForegroundWindow().0 as isize == HWND_VAL.load(Relaxed) {
+        if code >= 0 {
+            let k = &*(lp.0 as *const KBDLLHOOKSTRUCT);
+            CALLS.fetch_add(1, Relaxed);
+            LAST_FG.store(GetForegroundWindow().0 as isize, Relaxed);
+            LAST_EXTRA.store(k.dwExtraInfo, Relaxed);
+        }
+        if code >= 0 && ACTIVE.load(Relaxed) && ours_in_front() {
             let k = &*(lp.0 as *const KBDLLHOOKSTRUCT);
             // Skip only keys this app injected (host and client on one PC would loop). Keys other
             // software injects are real typing: some keyboards send every key that way.
@@ -47,6 +53,25 @@ unsafe extern "system" fn proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
             }
         }
         CallNextHookEx(None, code, wp, lp)
+    }
+}
+
+// What the hook last saw, for the "key got past the hook" log line.
+static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LAST_FG: AtomicIsize = AtomicIsize::new(0);
+static LAST_EXTRA: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The foreground window is ours: the session window, or any other window of this process
+/// (a child/owned window can be what Windows reports as foreground).
+fn ours_in_front() -> bool {
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.0 as isize == HWND_VAL.load(Relaxed) {
+            return true;
+        }
+        let mut pid = 0;
+        GetWindowThreadProcessId(fg, Some(&mut pid));
+        pid == std::process::id()
     }
 }
 
@@ -94,7 +119,15 @@ pub fn missed_key() {
         return;
     }
     *last = Some(std::time::Instant::now());
-    crate::plog!("keyboard: a key got past the hook during the session; reinstalling it");
+    let fg = unsafe { GetForegroundWindow() }.0 as isize;
+    crate::plog!(
+        "keyboard: a key got past the hook during the session; reinstalling it (hook saw {} keys, last with foreground {:#x} extra {:#x}; ours {:#x}, now in front {:#x})",
+        CALLS.load(Relaxed),
+        LAST_FG.load(Relaxed),
+        LAST_EXTRA.load(Relaxed),
+        HWND_VAL.load(Relaxed),
+        fg
+    );
     rehook();
 }
 
