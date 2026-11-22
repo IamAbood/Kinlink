@@ -160,6 +160,9 @@ pub struct App {
     /// Friend whose chat window is open, and what's being typed.
     chat_with: Option<Pub>,
     chat_draft: String,
+    /// Mini game with a friend (one at a time), and whether the game picker is open in the chat.
+    game: Option<crate::minigames::Game>,
+    game_pick: bool,
     /// Copied pictures/files arriving from the other PC: batch -> (expected, is_image, paths).
     clip_batches: std::collections::HashMap<String, (usize, bool, Vec<std::path::PathBuf>)>,
     /// Joining by invite: (host id, code, since).
@@ -251,6 +254,8 @@ impl App {
             page: Page::Friends,
             status_edit: None,
             chat_with: None,
+            game: None,
+            game_pick: false,
             chat_draft: String::new(),
             pending_join: None,
             clip_batches: Default::default(),
@@ -587,6 +592,25 @@ impl App {
                         crate::plog!("join: found {host_id}, asking to connect");
                         self.connect_with(host, host_id, Some(code));
                     }
+                }
+            }
+            Event::Game { from, id, kind, moves } => {
+                let (Some(kind), Some(f)) = (crate::minigames::Kind::from_u8(kind), sig.friend(&from)) else { return };
+                match &mut self.game {
+                    Some(g) if g.id == id && g.with == from => {
+                        g.update(moves);
+                    }
+                    // A new invite. It doesn't cut into a running game with someone else.
+                    cur if moves.is_empty() && cur.as_ref().is_none_or(|g| g.with == from || g.outcome() != crate::minigames::Outcome::Playing) => {
+                        *cur = Some(crate::minigames::Game { id, with: from, kind, moves, i_start: false, sent: Instant::now() });
+                        let text = tlf("{} wants to play {}", &[&f.display(), &tl(kind.name())]);
+                        if self.window().is_some_and(|w| w.has_focus()) {
+                            self.toast(text);
+                        } else {
+                            crate::notify::toast(&text, &tl("Open Kinlink to play."));
+                        }
+                    }
+                    _ => {} // a game we closed, or busy with another one
                 }
             }
             Event::Message { from, text } => {
@@ -2348,6 +2372,7 @@ impl App {
         }
         self.nettest_ui(root.ctx());
         self.friend_chat_ui(root.ctx(), &sig);
+        self.game_ui(root.ctx(), &sig);
     }
 
     fn friend_rows(&mut self, ui: &mut egui::Ui, sig: &Signal, friends: Vec<(Friend, bool)>, connect: &mut Option<Friend>) {
@@ -3059,6 +3084,7 @@ impl App {
         let online = sig.friends().iter().any(|(x, on)| x.public == with && *on);
         let mut close = false;
         let mut send = false;
+        let mut invite = None;
         egui::Window::new("friend chat")
             .id(egui::Id::new("friend_chat"))
             .title_bar(false)
@@ -3078,8 +3104,20 @@ impl App {
                         if t::icon_button(ui, t::Icon::Close, &tr("Close"), false).clicked() {
                             close = true;
                         }
+                        if t::icon_button(ui, t::Icon::Gamepad, &tr("Play a game"), self.game_pick).clicked() {
+                            self.game_pick = !self.game_pick;
+                        }
                     });
                 });
+                if self.game_pick {
+                    ui.horizontal(|ui| {
+                        for k in crate::minigames::Kind::ALL {
+                            if ui.add_enabled(online, egui::Button::new(tr(k.name()))).on_disabled_hover_text(tr("They need to be online")).clicked() {
+                                invite = Some(k);
+                            }
+                        }
+                    });
+                }
                 ui.separator();
                 egui::ScrollArea::vertical().id_salt("fchat").max_height(300.0).min_scrolled_height(300.0).stick_to_bottom(true).show(ui, |ui| {
                     ui.set_width(318.0);
@@ -3132,6 +3170,108 @@ impl App {
         }
         if close {
             self.chat_with = None;
+        }
+        if let Some(kind) = invite {
+            self.start_game(sig, with, kind);
+        }
+    }
+
+    /// Invites a friend to a game (I move first).
+    fn start_game(&mut self, sig: &Signal, with: Pub, kind: crate::minigames::Kind) {
+        let g = crate::minigames::Game { id: rand::random(), with, kind, moves: vec![], i_start: true, sent: Instant::now() };
+        sig.send(&with, Sig::Game { id: g.id, kind: kind.as_u8(), moves: vec![] });
+        self.game = Some(g);
+        self.game_pick = false;
+    }
+
+    /// The mini game window.
+    fn game_ui(&mut self, ctx: &egui::Context, sig: &Signal) {
+        use crate::minigames::{Kind, Outcome};
+        use crate::theme as t;
+        let Some(g) = &mut self.game else { return };
+        let name = sig.friend(&g.with).map(|f| f.display()).unwrap_or_default();
+        // Waiting on them (or the game is over): re-send our state now and then, in case a message got lost.
+        if !g.my_turn() {
+            if g.sent.elapsed() > Duration::from_secs(6) {
+                g.sent = Instant::now();
+                sig.send(&g.with, Sig::Game { id: g.id, kind: g.kind.as_u8(), moves: g.moves.clone() });
+            }
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
+        let (cols, rows) = g.kind.size();
+        let cell = if g.kind == Kind::TicTacToe { 80.0 } else { 46.0 };
+        let board = g.board();
+        let outcome = g.outcome();
+        let (me, my_turn) = (g.me(), g.my_turn());
+        let (mut open, mut played, mut again) = (true, None, false);
+        egui::Window::new(RichText::new(trf("{} with {}", &[&tl(g.kind.name()), &name])).size(15.0).strong())
+            .id(egui::Id::new("minigame"))
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                let status = match outcome {
+                    Outcome::Won(p) if p == me => tr("You won!"),
+                    Outcome::Won(_) => trf("{} won", &[&name]),
+                    Outcome::Draw => tr("It's a draw"),
+                    Outcome::Playing if my_turn => tr("Your turn"),
+                    Outcome::Playing => trf("Waiting for {}…", &[&name]),
+                };
+                ui.label(RichText::new(status).size(15.0).color(if my_turn { t::MINT_SOFT() } else { t::SOFT() }));
+                ui.add_space(6.0);
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(cols as f32 * cell, rows as f32 * cell), egui::Sense::click());
+                let p = ui.painter_at(rect);
+                p.rect_filled(rect, 10.0, t::BG());
+                let hover = resp.hover_pos().filter(|_| my_turn).map(|h| (((h.x - rect.min.x) / cell) as usize).min(cols - 1));
+                for r in 0..rows {
+                    for c in 0..cols {
+                        let center = rect.min + egui::vec2((c as f32 + 0.5) * cell, (r as f32 + 0.5) * cell);
+                        let color = |v: u8| if v == 1 { t::ACCENT() } else { t::MINT() };
+                        let v = board[r * cols + c];
+                        match g.kind {
+                            Kind::TicTacToe => {
+                                let sq = egui::Rect::from_center_size(center, egui::vec2(cell - 6.0, cell - 6.0));
+                                p.rect_filled(sq, 8.0, t::HOVER());
+                                let s = cell * 0.25;
+                                if v == 1 {
+                                    let st = egui::Stroke::new(7.0, color(1));
+                                    p.line_segment([center + egui::vec2(-s, -s), center + egui::vec2(s, s)], st);
+                                    p.line_segment([center + egui::vec2(s, -s), center + egui::vec2(-s, s)], st);
+                                } else if v == 2 {
+                                    p.circle_stroke(center, s * 1.1, egui::Stroke::new(7.0, color(2)));
+                                }
+                            }
+                            Kind::ConnectFour => {
+                                let col_hover = hover == Some(c) && board[c] == 0;
+                                let fill = if v != 0 { color(v) } else if col_hover { t::LINE() } else { t::HOVER() };
+                                p.circle_filled(center, cell * 0.4, fill);
+                            }
+                        }
+                    }
+                }
+                if resp.clicked() && my_turn {
+                    if let Some(pos) = resp.interact_pointer_pos() {
+                        let (c, r) = ((((pos.x - rect.min.x) / cell) as usize).min(cols - 1), (((pos.y - rect.min.y) / cell) as usize).min(rows - 1));
+                        played = Some(if g.kind == Kind::TicTacToe { (r * cols + c) as u8 } else { c as u8 });
+                    }
+                }
+                ui.add_space(6.0);
+                ui.label(RichText::new(if me == 1 { tr("You're purple, they're green") } else { tr("You're green, they're purple") }).size(11.5).color(t::MUTED()));
+                if outcome != Outcome::Playing && t::primary(ui, &tr("Play again"), Some(t::Icon::Play), true).clicked() {
+                    again = true;
+                }
+            });
+        if let Some(m) = played {
+            if g.play(m) {
+                g.sent = Instant::now();
+                sig.send(&g.with, Sig::Game { id: g.id, kind: g.kind.as_u8(), moves: g.moves.clone() });
+            }
+        }
+        if again {
+            let (with, kind) = (g.with, g.kind);
+            self.start_game(sig, with, kind);
+        } else if !open {
+            self.game = None;
         }
     }
 }

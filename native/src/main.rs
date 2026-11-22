@@ -39,6 +39,7 @@ mod pkg;
 mod updater;
 mod web;
 mod games;
+mod minigames;
 
 use std::time::{Duration, Instant};
 

@@ -71,6 +71,8 @@ pub enum Sig {
     GuestConnect { code: String, name: String, req: u64, eph: Pub, addrs: Vec<SocketAddr> },
     /// "Please connect to my PC and help me" (older versions ignore it).
     HelpRequest,
+    /// A mini game: the whole move list so far (empty = an invite). See minigames.rs.
+    Game { id: u64, kind: u8, moves: Vec<u8> },
 }
 
 /// An invite this PC handed out: one use, expires after an hour.
@@ -138,6 +140,8 @@ pub enum Event {
     JoinReady { host: Pub, host_id: String },
     /// A friend asked us to connect and help them.
     HelpRequest(Pub),
+    /// A friend's mini game state (invite or move).
+    Game { from: Pub, id: u64, kind: u8, moves: Vec<u8> },
 }
 
 /// Writes a friends file directly (test profiles).
@@ -796,6 +800,11 @@ impl Signal {
             Sig::HelpRequest => {
                 if self.friend(&from).is_some() {
                     self.event(Event::HelpRequest(from));
+                }
+            }
+            Sig::Game { id, kind, moves } => {
+                if self.friend(&from).is_some() && moves.len() <= 64 {
+                    self.event(Event::Game { from, id, kind, moves });
                 }
             }
             Sig::MessageAck { id } => {
