@@ -150,6 +150,8 @@ pub struct App {
     peer: String,
     message: Option<(String, Instant)>,
     add_text: String,
+    /// Kinlink PCs heard on this network.
+    lan: crate::lan::Lan,
     add_err: Option<String>,
     rename_text: String,
     page: Page,
@@ -243,6 +245,7 @@ impl App {
             peer: String::new(),
             message: None,
             add_text: String::new(),
+            lan: crate::lan::Lan::start(),
             add_err: None,
             rename_text: String::new(),
             page: Page::Friends,
@@ -1637,6 +1640,8 @@ impl App {
             }
         });
 
+        // Only PCs that let friends connect show up on the network.
+        self.lan.set_announce(self.s.hosting.then(|| sig.id()));
         // ------------------------------------------------ pages
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t::BG()).inner_margin(egui::Margin { left: 30, right: 30, top: 24, bottom: 8 })).show(root, |ui| {
             egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
@@ -1704,6 +1709,25 @@ impl App {
                             if o.conflict {
                                 para(ui, &tl("Two different PCs answered for this ID. Only accept if the safety code matches on your friend's screen."), 13.0, t::DANGER());
                             }
+                        }
+                        let pending = sig.outgoing();
+                        let nearby: Vec<String> = self.lan.nearby().into_iter().filter(|id| !friends.iter().any(|(f, _)| f.id() == *id) && !pending.contains(id)).collect();
+                        if !nearby.is_empty() {
+                            t::section(ui, &tr("On this network"));
+                            t::card().show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                for id in &nearby {
+                                    ui.horizontal(|ui| {
+                                        dot(ui, t::MINT());
+                                        ui.label(RichText::new(id).font(egui::FontId::new(14.0, t::bold())));
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            if t::primary(ui, &tr("Add"), Some(Icon::Plus), true).clicked() {
+                                                self.add_err = sig.add_friend(id).err();
+                                            }
+                                        });
+                                    });
+                                }
+                            });
                         }
                         friends.sort_by_key(|(f, on)| (!on, f.display().to_lowercase()));
                         if friends.is_empty() {

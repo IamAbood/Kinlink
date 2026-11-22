@@ -270,3 +270,141 @@ impl Capturer {
         Ok(())
     }
 }
+
+// ---------------------------------------------------------------- one window
+
+/// Windows a host can share: visible top-level app windows with a title (not ours).
+pub fn windows() -> Vec<(isize, String)> {
+    use windows::Win32::Foundation::{HWND, LPARAM};
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    use windows::Win32::UI::WindowsAndMessaging::*;
+    unsafe extern "system" fn each(h: HWND, lp: LPARAM) -> windows::core::BOOL {
+        unsafe {
+            let out = &mut *(lp.0 as *mut Vec<(isize, String)>);
+            let mut pid = 0;
+            GetWindowThreadProcessId(h, Some(&mut pid));
+            let mut cloaked = 0u32;
+            let _ = DwmGetWindowAttribute(h, DWMWA_CLOAKED, &mut cloaked as *mut _ as _, 4);
+            let ex = GetWindowLongW(h, GWL_EXSTYLE) as u32;
+            if IsWindowVisible(h).as_bool() && cloaked == 0 && pid != std::process::id() && GetWindow(h, GW_OWNER).is_err() && ex & WS_EX_TOOLWINDOW.0 == 0 {
+                let mut buf = [0u16; 256];
+                let n = GetWindowTextW(h, &mut buf);
+                if n > 0 {
+                    out.push((h.0 as isize, String::from_utf16_lossy(&buf[..n as usize])));
+                }
+            }
+            true.into()
+        }
+    }
+    let mut out = Vec::new();
+    unsafe {
+        let _ = EnumWindows(Some(each), LPARAM(&mut out as *mut _ as isize));
+    }
+    out
+}
+
+/// Where a window is on screen (what its capture shows), or None if it's gone.
+pub fn window_rect(hwnd: isize) -> Option<RECT> {
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
+    let h = windows::Win32::Foundation::HWND(hwnd as _);
+    unsafe {
+        if !windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(h)).as_bool() {
+            return None;
+        }
+        let mut r = RECT::default();
+        DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, &mut r as *mut _ as _, std::mem::size_of::<RECT>() as u32).ok()?;
+        Some(r)
+    }
+}
+
+/// Captures one window (Windows Graphics Capture): only that window, even when something
+/// covers it. The cursor is drawn into the image.
+pub struct WindowCapturer {
+    pub hwnd: isize,
+    device: ID3D11Device,
+    ctx: ID3D11DeviceContext,
+    d3d: windows::Graphics::DirectX::Direct3D11::IDirect3DDevice,
+    pool: windows::Graphics::Capture::Direct3D11CaptureFramePool,
+    _session: windows::Graphics::Capture::GraphicsCaptureSession,
+    pool_size: windows::Graphics::SizeInt32,
+    staging: Option<(ID3D11Texture2D, u32, u32)>,
+    /// Even-sized frame dimensions of the last image.
+    pub width: usize,
+    pub height: usize,
+}
+
+unsafe impl Send for WindowCapturer {}
+
+impl WindowCapturer {
+    pub fn new(hwnd: isize) -> Result<Self> {
+        use windows::Graphics::Capture::{Direct3D11CaptureFramePool, GraphicsCaptureItem};
+        use windows::Graphics::DirectX::DirectXPixelFormat;
+        use windows::Win32::System::WinRT::Direct3D11::CreateDirect3D11DeviceFromDXGIDevice;
+        use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
+        unsafe {
+            let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED);
+            let (mut device, mut ctx) = (None, None);
+            D3D11CreateDevice(None, windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE, HMODULE::default(), D3D11_CREATE_DEVICE_BGRA_SUPPORT, None, D3D11_SDK_VERSION, Some(&mut device), None, Some(&mut ctx)).context("D3D11CreateDevice")?;
+            let device = device.context("no device")?;
+            let d3d = CreateDirect3D11DeviceFromDXGIDevice(&device.cast::<IDXGIDevice>()?)?.cast()?;
+            let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
+            let item: GraphicsCaptureItem = interop.CreateForWindow(windows::Win32::Foundation::HWND(hwnd as _)).context("that window can't be captured")?;
+            let size = item.Size()?;
+            let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(&d3d, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size)?;
+            let session = pool.CreateCaptureSession(&item)?;
+            let _ = session.SetIsBorderRequired(false); // no yellow frame where Windows allows it
+            session.StartCapture()?;
+            Ok(Self { hwnd, device, ctx: ctx.context("no context")?, d3d, pool, _session: session, pool_size: size, staging: None, width: 0, height: 0 })
+        }
+    }
+
+    /// Waits up to `timeout_ms` for a new image; true = `out` got it (BGRA, width x height).
+    // ponytail: polls the free-threaded pool every 2 ms; use the FrameArrived event if this shows up in CPU use
+    pub fn next_frame(&mut self, timeout_ms: u32, out: &mut Vec<u8>) -> Result<bool> {
+        use windows::Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess;
+        let until = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms as u64);
+        let frame = loop {
+            if let Ok(f) = self.pool.TryGetNextFrame() {
+                break f;
+            }
+            if std::time::Instant::now() >= until {
+                return Ok(false);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        let size = frame.ContentSize()?;
+        if size.Width <= 1 || size.Height <= 1 {
+            return Ok(false); // minimized
+        }
+        unsafe {
+            let tex: ID3D11Texture2D = frame.Surface()?.cast::<IDirect3DDxgiInterfaceAccess>()?.GetInterface()?;
+            let mut desc = D3D11_TEXTURE2D_DESC::default();
+            tex.GetDesc(&mut desc);
+            if self.staging.as_ref().is_none_or(|s| (s.1, s.2) != (desc.Width, desc.Height)) {
+                let sd = D3D11_TEXTURE2D_DESC { Usage: D3D11_USAGE_STAGING, BindFlags: 0, CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32, MiscFlags: 0, MipLevels: 1, ArraySize: 1, SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 }, ..desc };
+                let mut t = None;
+                self.device.CreateTexture2D(&sd, None, Some(&mut t))?;
+                self.staging = Some((t.context("no texture")?, desc.Width, desc.Height));
+            }
+            let staging = &self.staging.as_ref().unwrap().0;
+            self.ctx.CopyResource(staging, &tex);
+            let (w, h) = ((size.Width as u32).min(desc.Width) as usize & !1, (size.Height as u32).min(desc.Height) as usize & !1);
+            let mut m = D3D11_MAPPED_SUBRESOURCE::default();
+            self.ctx.Map(staging, 0, D3D11_MAP_READ, 0, Some(&mut m))?;
+            out.resize(w * h * 4, 0);
+            for y in 0..h {
+                let src = std::slice::from_raw_parts((m.pData as *const u8).add(y * m.RowPitch as usize), w * 4);
+                out[y * w * 4..(y + 1) * w * 4].copy_from_slice(src);
+            }
+            self.ctx.Unmap(staging, 0);
+            (self.width, self.height) = (w, h);
+        }
+        drop(frame);
+        // The window was resized: the pool must match or the image gets cut off.
+        if (size.Width, size.Height) != (self.pool_size.Width, self.pool_size.Height) {
+            self.pool.Recreate(&self.d3d, windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size)?;
+            self.pool_size = size;
+        }
+        Ok(true)
+    }
+}

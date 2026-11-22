@@ -4,6 +4,7 @@ pub fn get(en: &str) -> Option<&'static str> {
     Some(match en {
         // ---- navigation & titles
         "Friends" => "الأصدقاء",
+        "On this network" => "على هذه الشبكة",
         "This PC" => "هذا الجهاز",
         "Files" => "الملفات",
         "Settings" => "الإعدادات",

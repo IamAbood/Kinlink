@@ -4,9 +4,9 @@
 # Identity values: from Partner Center > the app > Product identity. Placeholders work for local tests.
 param(
     [string]$Exe = "",
-    [string]$Name = "Kinlink.Dev",
-    [string]$Publisher = "CN=KinlinkDev",
-    [string]$PublisherDisplay = "Abdulkareem Alsaou",
+    [string]$Name = "AlsaouServices.KinLinkRemote",
+    [string]$Publisher = "CN=22BDAD11-4BA0-483F-8AF0-6138E28D0E8C",
+    [string]$PublisherDisplay = "Alsaou Services",
     [switch]$Register
 )
 $ErrorActionPreference = 'Stop'
