@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kinlink Privacy Policy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;800&display=swap">
+<style>
+  :root { --bg: #0B1020; --card: #121A30; --line: #26304F; --text: #E9ECF8; --soft: #A9B1CF; --accent: #7C6CFF; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 500 15px/1.6 Manrope, system-ui, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-weight: 800; font-size: 28px; margin: 0 0 4px; }
+  h2 { font-weight: 800; font-size: 18px; margin: 28px 0 8px; }
+  p, li { color: var(--soft); }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<h1>Kinlink Privacy Policy</h1>
+<p>Last updated: November 22, 2026</p>
+
+<p>Kinlink lets you use your PC from another device and share it with friends. It has no accounts and no servers of its own. We do not collect, store, sell or share your personal data.</p>
+
+<h2>What stays on your device</h2>
+<ul>
+  <li>Your Kinlink ID, its encryption keys, your friends list, permissions and settings are stored only on your device.</li>
+  <li>Screenshots and recordings you make are saved only on your device.</li>
+  <li>A local log file helps with troubleshooting. It never leaves your PC unless you send it to someone yourself.</li>
+</ul>
+
+<h2>Sessions</h2>
+<p>Screen, sound, input, chat, voice and files go directly between the connected devices (peer to peer) and are encrypted end to end. Nobody else, including us, can see them. A session starts only when the host approves it, or when the host has allowed that friend in advance.</p>
+
+<h2>Third-party services Kinlink uses</h2>
+<ul>
+  <li><strong>Public MQTT brokers</strong> (broker.emqx.io, broker.hivemq.com) pass friend requests and connection setup between devices. Every message is encrypted end to end and addressed with random-looking names, so the brokers only see unreadable data and your device's IP address.</li>
+  <li><strong>STUN servers</strong> (Google, Cloudflare) tell your device its public address so peers can connect directly. They see your IP address.</li>
+  <li><strong>GitHub</strong> hosts the browser client and app updates. Versions installed outside the Store check GitHub for updates, and GitHub sees your IP address.</li>
+</ul>
+<p>Each of these services has its own privacy policy.</p>
+
+<h2>Children</h2>
+<p>Kinlink is not directed at children under 13 and does not knowingly collect any data from them.</p>
+
+<h2>Changes</h2>
+<p>If this policy changes, the new version will be posted on this page.</p>
+
+<h2>Contact</h2>
+<p>Questions: open an issue at <a href="https://github.com/IamAbood/Kinlink/issues">github.com/IamAbood/Kinlink/issues</a>.</p>
+</main>
+</body>
+</html>
