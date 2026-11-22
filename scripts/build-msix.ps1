@@ -4,6 +4,7 @@
 # Identity values: from Partner Center > the app > Product identity. Placeholders work for local tests.
 param(
     [string]$Exe = "",
+    [string]$Version = "",  # e.g. 0.29.8.0; default: from nativeCargo.toml
     [string]$Name = "AlsaouServices.KinLinkRemote",
     [string]$Publisher = "CN=22BDAD11-4BA0-483F-8AF0-6138E28D0E8C",
     [string]$PublisherDisplay = "Alsaou Services",
@@ -15,7 +16,7 @@ if (-not $Exe) { $Exe = "$root\native\target\release\pclone.exe" }
 
 # Store versions are 4 numbers and the last must be 0: 0.29.5-beta -> 0.29.5.0
 $ver = (Select-String -Path "$root\native\Cargo.toml" -Pattern '^version = "(\d+)\.(\d+)\.(\d+)').Matches[0].Groups
-$version = "$($ver[1].Value).$($ver[2].Value).$($ver[3].Value).0"
+$version = if ($Version) { $Version } else { "$($ver[1].Value).$($ver[2].Value).$($ver[3].Value).0" }
 
 $layout = "$root\dist\msix"
 if (Test-Path $layout) { Remove-Item $layout -Recurse -Force }
