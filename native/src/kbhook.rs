@@ -1,6 +1,6 @@
 //! Low-level keyboard hook: while streaming and focused, every key (incl. Win, Alt+Tab) is swallowed
 //! locally and forwarded to the host as a scan code. Ctrl+Alt+Del can't be intercepted (Windows SAS).
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering::*};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering::*};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -23,6 +23,7 @@ pub const OUR_INPUT: usize = 0x5043_4C4E; // "PCLN"
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static ALLOW_INJECTED: AtomicBool = AtomicBool::new(false);
 static DEBUG: AtomicBool = AtomicBool::new(false);
+static SELF_TEST: AtomicBool = AtomicBool::new(false);
 static HWND_VAL: AtomicIsize = AtomicIsize::new(0);
 static TX: Mutex<Option<(Sender<KeyEv>, Wake)>> = Mutex::new(None);
 
@@ -43,17 +44,23 @@ unsafe extern "system" fn proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
             // Skip only keys this app injected (host and client on one PC would loop). Keys other
             // software injects are real typing: some keyboards send every key that way.
             if k.dwExtraInfo != OUR_INPUT || ALLOW_INJECTED.load(Relaxed) {
-                let ev = KeyEv { scan: k.scanCode as u16, ext: k.flags.0 & LLKHF_EXTENDED.0 != 0, down: k.flags.0 & LLKHF_UP.0 == 0 };
-                if let Some((tx, wake)) = &*TX.lock().unwrap() {
-                    let _ = tx.send(ev);
-                    // The hook runs inside the message wait without producing a window event,
-                    // so the UI loop must be woken explicitly or the key sits in the queue.
-                    wake();
-                }
+                forward(KeyEv { scan: k.scanCode as u16, ext: k.flags.0 & LLKHF_EXTENDED.0 != 0, down: k.flags.0 & LLKHF_UP.0 == 0 });
                 return LRESULT(1);
             }
         }
         CallNextHookEx(None, code, wp, lp)
+    }
+}
+
+fn forward(ev: KeyEv) {
+    if SELF_TEST.load(Relaxed) && ev.scan == 0x76 {
+        return; // the self-test's F24: not for the host
+    }
+    if let Some((tx, wake)) = &*TX.lock().unwrap() {
+        let _ = tx.send(ev);
+        // The hook runs inside the message wait without producing a window event,
+        // so the UI loop must be woken explicitly or the key sits in the queue.
+        wake();
     }
 }
 
@@ -72,7 +79,16 @@ fn ours_in_front() -> bool {
         }
         let mut pid = 0;
         GetWindowThreadProcessId(fg, Some(&mut pid));
-        pid == std::process::id()
+        pid == owner_pid()
+    }
+}
+
+/// The process whose windows count as "ours": the app (the helper process hooks for its parent).
+static OWNER_PID: AtomicU32 = AtomicU32::new(0);
+fn owner_pid() -> u32 {
+    match OWNER_PID.load(Relaxed) {
+        0 => std::process::id(),
+        p => p,
     }
 }
 
@@ -122,12 +138,14 @@ pub fn self_test() {
         if !ours_in_front() {
             return crate::plog!("keyboard: self-test skipped (Kinlink not in front); {}", system_info());
         }
+        SELF_TEST.store(true, Relaxed);
         let before = CALLS.load(Relaxed);
         let key = |flags| INPUT { r#type: INPUT_KEYBOARD, Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VK_F24, wScan: 0x76, dwFlags: flags, time: 0, dwExtraInfo: 0 } } };
         SendInput(&[key(Default::default()), key(KEYEVENTF_KEYUP)], std::mem::size_of::<INPUT>() as i32);
         std::thread::sleep(std::time::Duration::from_millis(300));
         let seen = CALLS.load(Relaxed) - before;
-        crate::plog!("keyboard: self-test with Kinlink in front: hook saw {seen} of 2 test keys ({}); {}", if seen >= 2 { "OK" } else { "BLOCKED" }, system_info());
+        SELF_TEST.store(false, Relaxed);
+        crate::plog!("keyboard: self-test with Kinlink in front: hook saw {seen} of 2 test keys ({}, {}); {}", if seen >= 2 { "OK" } else { "BLOCKED" }, if CHILD.lock().unwrap().is_some() { "helper process" } else { "in-app hook" }, system_info());
     });
 }
 
@@ -147,9 +165,10 @@ pub fn log_security_software() {
     });
 }
 
-/// Installs the hook on its own thread with a plain GetMessage loop. Windows only calls a
-/// low-level hook while its thread pumps messages, and silently removes hooks that don't
-/// answer in time; the UI thread's wait doesn't reliably service them.
+/// Starts the hook and returns the keys it takes during a session. Recent Windows 11 builds
+/// (seen on 25H2) never call a low-level hook for keys going to a window of the hooking process,
+/// so with Kinlink in front Alt+Tab went local. The hook therefore runs in a small helper
+/// process (`--kbhook`), which pipes the keys back; if that can't start, it runs in-app.
 pub fn install(hwnd: HWND, wake: impl Fn() + Send + 'static) -> Receiver<KeyEv> {
     let (tx, rx) = channel();
     *TX.lock().unwrap() = Some((tx, Box::new(wake)));
@@ -157,19 +176,110 @@ pub fn install(hwnd: HWND, wake: impl Fn() + Send + 'static) -> Receiver<KeyEv> 
     // Test switch: lets simulated key presses through so the path can be tested automatically.
     ALLOW_INJECTED.store(std::env::var_os("PCLONE_HOOK_INJECTED").is_some(), Relaxed);
     DEBUG.store(std::env::var_os("PCLONE_DEBUG").is_some(), Relaxed);
-    std::thread::spawn(|| unsafe {
+    if std::env::var_os("PCLONE_INAPP_HOOK").is_some() || !spawn_helper(hwnd) {
+        std::thread::spawn(hook_loop);
+    }
+    rx
+}
+
+/// The helper process's stdin: 0 = session off, 1 = on, 2 = rehook. Dropping it ends the helper.
+static CHILD: Mutex<Option<std::process::ChildStdin>> = Mutex::new(None);
+
+fn spawn_helper(hwnd: HWND) -> bool {
+    use std::io::{BufRead, Read};
+    use std::process::{Command, Stdio};
+    let Ok(exe) = std::env::current_exe() else { return false };
+    let child = Command::new(exe)
+        .args(["--kbhook", &std::process::id().to_string(), &(hwnd.0 as isize).to_string()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            crate::plog!("keyboard: helper process failed to start ({e}); hooking in-app");
+            return false;
+        }
+    };
+    let (mut out, err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+    *CHILD.lock().unwrap() = child.stdin.take();
+    // Its log lines (stderr) go into our log, minus its own timestamp.
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(err).lines().map_while(Result::ok) {
+            crate::plog!("{}", line.split_once(' ').map_or(line.as_str(), |(_, m)| m));
+        }
+    });
+    std::thread::spawn(move || {
+        let mut b = [0u8; 3];
+        while out.read_exact(&mut b).is_ok() {
+            CALLS.fetch_add(1, Relaxed);
+            forward(KeyEv { scan: u16::from_le_bytes([b[0], b[1]]), ext: b[2] & 1 != 0, down: b[2] & 2 != 0 });
+        }
+        let _ = child.wait();
+        crate::plog!("keyboard: helper process ended; hooking in-app");
+        *CHILD.lock().unwrap() = None;
+        hook_loop();
+    });
+    true
+}
+
+fn tell_helper(b: u8) -> bool {
+    use std::io::Write;
+    let mut c = CHILD.lock().unwrap();
+    c.as_mut().is_some_and(|s| s.write_all(&[b]).and_then(|_| s.flush()).is_ok())
+}
+
+/// `Kinlink.exe --kbhook <app pid> <app window>`: hooks for the app and writes the keys it takes
+/// to stdout (scan lo, scan hi, flags: 1 = extended, 2 = down). Ends when the app closes stdin.
+pub fn helper_main(owner: u32, hwnd: isize) -> ! {
+    use std::io::{Read, Write};
+    OWNER_PID.store(owner, Relaxed);
+    HWND_VAL.store(hwnd, Relaxed);
+    ALLOW_INJECTED.store(std::env::var_os("PCLONE_HOOK_INJECTED").is_some(), Relaxed);
+    DEBUG.store(std::env::var_os("PCLONE_DEBUG").is_some(), Relaxed);
+    let (tx, rx) = channel::<KeyEv>();
+    *TX.lock().unwrap() = Some((tx, Box::new(|| {})));
+    std::thread::spawn(move || {
+        let mut out = std::io::stdout().lock();
+        for ev in rx {
+            let s = ev.scan.to_le_bytes();
+            if out.write_all(&[s[0], s[1], ev.ext as u8 | (ev.down as u8) << 1]).and_then(|_| out.flush()).is_err() {
+                std::process::exit(0);
+            }
+        }
+    });
+    std::thread::spawn(|| {
+        let mut b = [0u8; 1];
+        while std::io::stdin().read_exact(&mut b).is_ok() {
+            match b[0] {
+                0 => ACTIVE.store(false, Relaxed),
+                1 => ACTIVE.store(true, Relaxed),
+                _ => post_rehook(),
+            }
+        }
+        std::process::exit(0); // the app is gone
+    });
+    hook_loop();
+    std::process::exit(0)
+}
+
+/// Installs the hook on this thread and pumps messages. Windows only calls a low-level hook
+/// while its thread pumps messages, and silently removes hooks that don't answer in time;
+/// the UI thread's wait doesn't reliably service them.
+fn hook_loop() {
+    unsafe {
         use windows::Win32::System::Threading::{GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL};
         HOOK_THREAD.store(GetCurrentThreadId(), Relaxed);
-        // Windows skips (then silently removes) a hook that answers late. On a slow laptop busy
-        // decoding the stream, a normal-priority thread was too late every time Kinlink was in
-        // front, so Alt+Tab went local. The hook does almost nothing, so top priority is safe.
+        // Windows skips (then silently removes) a hook that answers late. The hook does almost
+        // nothing, so top priority is safe.
         let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
         let module = GetModuleHandleW(None).unwrap_or_default();
         let mut hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(proc), Some(module.into()), 0) {
             Ok(h) => h,
             Err(e) => return crate::plog!("keyboard hook failed: {e}"),
         };
-        crate::plog!("keyboard: hook installed ({})", system_info());
+        crate::plog!("keyboard: hook installed{} ({})", if OWNER_PID.load(Relaxed) != 0 { " in helper process" } else { "" }, system_info());
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             if msg.message == WM_APP_REHOOK {
@@ -181,8 +291,7 @@ pub fn install(hwnd: HWND, wake: impl Fn() + Send + 'static) -> Receiver<KeyEv> 
                 }
             }
         }
-    });
-    rx
+    }
 }
 
 const WM_APP_REHOOK: u32 = WM_APP + 7;
@@ -214,6 +323,12 @@ pub fn missed_key() {
 /// Puts the hook back fresh. Windows drops a hook without telling us, and Alt+Tab / Win never
 /// reach our window, so missed_key can't notice: also done at session start and on focus loss.
 pub fn rehook() {
+    if !tell_helper(2) {
+        post_rehook();
+    }
+}
+
+fn post_rehook() {
     let t = HOOK_THREAD.load(Relaxed);
     if t != 0 {
         unsafe {
@@ -228,5 +343,6 @@ pub fn is_active() -> bool {
 
 pub fn set_active(on: bool) {
     ACTIVE.store(on, Relaxed);
+    tell_helper(on as u8);
 }
 

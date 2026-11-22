@@ -211,6 +211,9 @@ LOCAL {local}");
     if let Some(p) = arg("--profile") {
         unsafe { std::env::set_var("PCLONE_PROFILE", p) };
     }
+    if let (Some(pid), Some(hwnd)) = (arg("--kbhook"), args.iter().position(|a| a == "--kbhook").and_then(|i| args.get(i + 2))) {
+        kbhook::helper_main(pid.parse().unwrap_or(0), hwnd.parse().unwrap_or(0));
+    }
     if args.iter().any(|a| a == "--pair-test-profiles") {
         return pair_test_profiles();
     }
