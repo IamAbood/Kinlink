@@ -30,6 +30,8 @@ pub struct HostConfig {
     pub upnp: bool,
     /// Record what guests see to Videos\Kinlink.
     pub record: bool,
+    /// Apps whose sound guests never hear (exe names, e.g. "Discord.exe").
+    pub muted_apps: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1109,6 +1111,16 @@ fn audio_loop(sh: Arc<Shared>) {
         seq = seq.wrapping_add(1);
         s2.broadcast(&Msg::Audio { seq, pcm });
     };
+    // Apps the owner muted for guests: capture each other app on its own and mix.
+    if !sh.cfg.muted_apps.is_empty() {
+        let (handle, rate) = crate::audio::start_app_mix(sh.cfg.muted_apps.clone(), send);
+        sh.audio_rate.store(rate, SeqCst);
+        while !sh.stop.load(SeqCst) {
+            thread::sleep(Duration::from_millis(100));
+        }
+        drop(handle);
+        return;
+    }
     // Preferred: everything except this app, so guests' voices we play aren't sent back.
     let send = match crate::audio::start_loopback_excluding_self(send.clone()) {
         Ok((handle, rate)) => {

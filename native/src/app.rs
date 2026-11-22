@@ -108,6 +108,8 @@ enum Update {
 enum TrayMsg {
     Open,
     Panic,
+    /// Restart Kinlink (it checks for updates when it starts).
+    Restart,
     Quit,
 }
 
@@ -185,6 +187,8 @@ pub struct App {
     sharp: bool,
     /// Session tool window: the host's games.
     games_open: bool,
+    /// Settings: typed name of an app to mute for guests.
+    mute_input: String,
     volume: u32,
     muted: bool,
     autostart: bool,
@@ -267,6 +271,7 @@ impl App {
             qual_idx: 3,
             sharp: false,
             games_open: false,
+            mute_input: String::new(),
             volume: 100,
             muted: false,
             autostart: settings::autostart_enabled(),
@@ -353,7 +358,7 @@ impl App {
 
     fn start_host(&mut self) {
         let name = self.signal.as_ref().map(|s| s.id()).unwrap_or_else(|| "Host".into());
-        let cfg = HostConfig { name, port: self.s.port, max_mbps: self.s.max_mbps, fps: self.s.fps, hardware: self.s.hardware, upnp: self.s.upnp, record: self.s.record_sessions };
+        let cfg = HostConfig { name, port: self.s.port, max_mbps: self.s.max_mbps, fps: self.s.fps, hardware: self.s.hardware, upnp: self.s.upnp, record: self.s.record_sessions, muted_apps: self.s.muted_apps.clone() };
         match Host::start(cfg) {
             Ok(h) => {
                 self.host = Some(h);
@@ -2097,6 +2102,50 @@ impl App {
                                 ui.set_width(ui.available_width());
                                 t::section(ui, &tr("Hosting quality"));
                                 restart_host |= t::switch(ui, &mut self.s.hardware, &tr("Hardware encoding (GPU)"));
+                                ui.add_space(4.0);
+                                ui.label(RichText::new(tr("Guests don't hear these apps")).color(t::SOFT()));
+                                let mut remove = None;
+                                for (i, app) in self.s.muted_apps.iter().enumerate() {
+                                    ui.horizontal(|ui| {
+                                        ui.label(RichText::new(app).monospace());
+                                        if ui.small_button("✕").on_hover_text(tr("Let guests hear it again")).clicked() {
+                                            remove = Some(i);
+                                        }
+                                    });
+                                }
+                                if let Some(i) = remove {
+                                    self.s.muted_apps.remove(i);
+                                    restart_host = true;
+                                }
+                                ui.horizontal(|ui| {
+                                    egui::ComboBox::from_id_salt("mute_pick").selected_text(tr("Add an app playing sound…")).show_ui(ui, |ui| {
+                                        let mut names: Vec<String> = crate::audio::playing_apps().into_iter().map(|(_, n)| n).filter(|n| !n.eq_ignore_ascii_case("pclone.exe") && !n.to_lowercase().starts_with("kinlink")).collect();
+                                        names.sort_by_key(|n| n.to_lowercase());
+                                        names.dedup();
+                                        if names.is_empty() {
+                                            ui.label(RichText::new(tr("Nothing is playing sound right now")).color(t::MUTED()));
+                                        }
+                                        for n in names {
+                                            if ui.selectable_label(false, &n).clicked() && !self.s.muted_apps.iter().any(|m| m.eq_ignore_ascii_case(&n)) {
+                                                self.s.muted_apps.push(n);
+                                                restart_host = true;
+                                            }
+                                        }
+                                    });
+                                    let r = ui.add(egui::TextEdit::singleline(&mut self.mute_input).hint_text(tr("or type: Spotify.exe")).desired_width(130.0));
+                                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                    if (ui.small_button(tr("Add")).clicked() || enter) && !self.mute_input.trim().is_empty() {
+                                        let mut n = self.mute_input.trim().to_string();
+                                        if !n.to_lowercase().ends_with(".exe") {
+                                            n.push_str(".exe");
+                                        }
+                                        if !self.s.muted_apps.iter().any(|m| m.eq_ignore_ascii_case(&n)) {
+                                            self.s.muted_apps.push(n);
+                                            restart_host = true;
+                                        }
+                                        self.mute_input.clear();
+                                    }
+                                });
                                 restart_host |= t::switch(ui, &mut self.s.record_sessions, &tr("Record sessions on this PC (Videos\\Kinlink)"));
                                 ui.horizontal(|ui| {
                                     ui.label(RichText::new(tr("Max fps")).color(t::SOFT()));
@@ -2429,13 +2478,14 @@ fn build_tray(wake: impl Fn() + Send + Sync + 'static) -> Option<(tray_icon::Tra
     let menu = Menu::new();
     let open = MenuItem::new("Open Kinlink", true, None);
     let panic = MenuItem::new("Disconnect everyone", true, None);
+    let restart = MenuItem::new("Check for updates", true, None);
     let quit = MenuItem::new("Quit", true, None);
-    menu.append_items(&[&open, &panic, &quit]).ok()?;
+    menu.append_items(&[&open, &panic, &restart, &quit]).ok()?;
     let icon = tray_icon::Icon::from_resource(1, Some((32, 32))).ok()?;
     let tray = TrayIconBuilder::new().with_menu(Box::new(menu)).with_menu_on_left_click(false).with_tooltip("Kinlink").with_icon(icon).build().ok()?;
     let (tx, rx) = channel();
     let wake = Arc::new(wake);
-    let (tx2, w2, open_id, quit_id, panic_id) = (tx.clone(), wake.clone(), open.id().clone(), quit.id().clone(), panic.id().clone());
+    let (tx2, w2, open_id, quit_id, panic_id, restart_id) = (tx.clone(), wake.clone(), open.id().clone(), quit.id().clone(), panic.id().clone(), restart.id().clone());
     MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
         let m = if e.id == quit_id {
             TrayMsg::Quit
@@ -2443,6 +2493,8 @@ fn build_tray(wake: impl Fn() + Send + Sync + 'static) -> Option<(tray_icon::Tra
             TrayMsg::Open
         } else if e.id == panic_id {
             TrayMsg::Panic
+        } else if e.id == restart_id {
+            TrayMsg::Restart
         } else {
             return;
         };
@@ -2614,7 +2666,13 @@ Updating the graphics driver usually fixes this.");
             match m {
                 TrayMsg::Open => self.show_window(),
                 TrayMsg::Panic => self.panic(),
-                TrayMsg::Quit => {
+                TrayMsg::Quit | TrayMsg::Restart => {
+                    if matches!(m, TrayMsg::Restart) {
+                        // The new copy waits for this one to exit, then starts and checks for updates.
+                        if let Ok(exe) = std::env::current_exe() {
+                            let _ = std::process::Command::new(exe).arg("--after-update").arg(std::process::id().to_string()).spawn();
+                        }
+                    }
                     self.leave_stream(None);
                     for p in std::mem::take(&mut self.popups) {
                         self.decline_incoming(&p, "closed the app");

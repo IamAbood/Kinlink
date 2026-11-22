@@ -39,11 +39,13 @@ pub struct Settings {
     pub record_sessions: bool,
     /// Light look instead of the dark "Midnight" one.
     pub light_theme: bool,
+    /// Apps whose sound guests don't hear (exe names). Discord by default: your call stays private.
+    pub muted_apps: Vec<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { hosting: true, port: crate::proto::DEFAULT_PORT, max_mbps: 30, fps: 60, hardware: true, upnp: true, autostart_init: false, fullscreen_connect: true, hint_seen: false, notify_online: true, language: String::new(), status: String::new(), ask_files: true, pad_map: Vec::new(), show_stats: false, hotkey_mods: 7, record_sessions: false, light_theme: false }
+        Self { hosting: true, port: crate::proto::DEFAULT_PORT, max_mbps: 30, fps: 60, hardware: true, upnp: true, autostart_init: false, fullscreen_connect: true, hint_seen: false, notify_online: true, language: String::new(), status: String::new(), ask_files: true, pad_map: Vec::new(), show_stats: false, hotkey_mods: 7, record_sessions: false, light_theme: false, muted_apps: vec!["Discord.exe".into()] }
     }
 }
 

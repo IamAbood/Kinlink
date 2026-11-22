@@ -198,7 +198,12 @@ impl Drop for ExcludeLoopback {
 
 /// Captures everything the PC plays EXCEPT this app (Windows 10 2004+), so voices we play
 /// aren't streamed back to the guests. 5 ms stereo i16 chunks at 48 kHz; silence is skipped.
-pub fn start_loopback_excluding_self(mut on_chunk: impl FnMut(Vec<i16>) + Send + 'static) -> Result<(ExcludeLoopback, u32)> {
+pub fn start_loopback_excluding_self(on_chunk: impl FnMut(Vec<i16>) + Send + 'static) -> Result<(ExcludeLoopback, u32)> {
+    start_process_loopback(std::process::id(), false, on_chunk)
+}
+
+/// Sound of one process tree (`include`) or of everything but it.
+fn start_process_loopback(pid: u32, include: bool, mut on_chunk: impl FnMut(Vec<i16>) + Send + 'static) -> Result<(ExcludeLoopback, u32)> {
     const RATE: u32 = 48_000;
     let stop = Arc::new(AtomicBool::new(false));
     let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<std::result::Result<(), String>>(1);
@@ -210,8 +215,8 @@ pub fn start_loopback_excluding_self(mut on_chunk: impl FnMut(Vec<i16>) + Send +
                 ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
                 Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
                     ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
-                        TargetProcessId: std::process::id(),
-                        ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+                        TargetProcessId: pid,
+                        ProcessLoopbackMode: if include { PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE } else { PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE },
                     },
                 },
             };
@@ -279,6 +284,126 @@ pub fn start_loopback_excluding_self(mut on_chunk: impl FnMut(Vec<i16>) + Send +
         Ok(Err(e)) => Err(anyhow::anyhow!(e)),
         Err(_) => Err(anyhow::anyhow!("process loopback didn't start")),
     }
+}
+
+
+/// Apps playing sound right now: (process id, exe name like "Discord.exe").
+pub fn playing_apps() -> Vec<(u32, String)> {
+    use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
+    let run = || -> Result<Vec<(u32, String)>> {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let en: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+            let dev = en.GetDefaultAudioEndpoint(eRender, eConsole)?;
+            let mgr: IAudioSessionManager2 = dev.Activate(CLSCTX_ALL, None)?;
+            let list = mgr.GetSessionEnumerator()?;
+            let mut out = Vec::new();
+            for i in 0..list.GetCount()? {
+                let Ok(s) = list.GetSession(i) else { continue };
+                let Ok(s2) = s.cast::<IAudioSessionControl2>() else { continue };
+                let Ok(pid) = s2.GetProcessId() else { continue };
+                // 0 = Windows system sounds (can't be captured on their own)
+                if pid != 0 && !out.iter().any(|(p, _)| *p == pid) {
+                    if let Some(name) = exe_name(pid) {
+                        out.push((pid, name));
+                    }
+                }
+            }
+            Ok(out)
+        }
+    };
+    run().unwrap_or_default()
+}
+
+fn exe_name(pid: u32) -> Option<String> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf = [0u16; 1024];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut len).is_ok();
+        let _ = CloseHandle(h);
+        let path = String::from_utf16_lossy(&buf[..len as usize]);
+        ok.then(|| path.rsplit('\\').next().unwrap_or(&path).to_string())
+    }
+}
+
+/// Keeps the per-app captures and the mixer running; stops them on drop.
+pub struct AppMix {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for AppMix {
+    fn drop(&mut self) {
+        self.stop.store(true, SeqCst);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+/// Everything the PC plays except the `muted` apps (exe names, any case) and Kinlink itself:
+/// each app that plays sound is captured on its own and mixed here. 5 ms chunks, 48 kHz stereo.
+// ponytail: an app and one of its own child processes both playing would be heard twice; dedupe by parent pid if that shows up
+pub fn start_app_mix(muted: Vec<String>, mut on_chunk: impl FnMut(Vec<i16>) + Send + 'static) -> (AppMix, u32) {
+    const RATE: u32 = 48_000;
+    const CHUNK: usize = 480; // 5 ms of stereo samples
+    let muted: Vec<String> = muted.iter().map(|m| m.trim().to_lowercase()).collect();
+    let stop = Arc::new(AtomicBool::new(false));
+    let st = stop.clone();
+    let thread = std::thread::spawn(move || {
+        type Buf = Arc<Mutex<std::collections::VecDeque<i16>>>;
+        let mut caps: std::collections::HashMap<u32, (ExcludeLoopback, Buf)> = Default::default();
+        let mut last_scan = std::time::Instant::now() - std::time::Duration::from_secs(10);
+        let start = std::time::Instant::now();
+        let mut emitted: u64 = 0;
+        while !st.load(SeqCst) {
+            if last_scan.elapsed() > std::time::Duration::from_secs(2) {
+                last_scan = std::time::Instant::now();
+                let me = std::process::id();
+                let want: Vec<(u32, String)> = playing_apps().into_iter().filter(|(p, n)| *p != me && !muted.contains(&n.to_lowercase())).collect();
+                caps.retain(|pid, _| want.iter().any(|(p, _)| p == pid));
+                for (pid, name) in want {
+                    if caps.contains_key(&pid) {
+                        continue;
+                    }
+                    let buf: Buf = Default::default();
+                    let b2 = buf.clone();
+                    match start_process_loopback(pid, true, move |c| {
+                        let mut q = b2.lock().unwrap();
+                        q.extend(c);
+                        let over = q.len().saturating_sub(RATE as usize / 10); // keep at most ~50 ms queued
+                        q.drain(..over);
+                    }) {
+                        Ok((h, _)) => {
+                            caps.insert(pid, (h, buf));
+                        }
+                        Err(e) => crate::plog!("audio: can't capture {name}: {e:#}"),
+                    }
+                }
+            }
+            // Mix in 5 ms steps, paced by the clock.
+            let due = start.elapsed().as_micros() as u64 * RATE as u64 * 2 / 1_000_000;
+            while emitted + CHUNK as u64 <= due {
+                let mut mix = vec![0i32; CHUNK];
+                for (_, buf) in caps.values() {
+                    let mut q = buf.lock().unwrap();
+                    let n = CHUNK.min(q.len());
+                    for (m, s) in mix.iter_mut().zip(q.drain(..n)) {
+                        *m += s as i32;
+                    }
+                }
+                emitted += CHUNK as u64;
+                if mix.iter().any(|s| s.abs() > 2) { // faint dither noise is silence
+                    on_chunk(mix.into_iter().map(|s| s.clamp(i16::MIN as i32, i16::MAX as i32) as i16).collect());
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(3));
+        }
+    });
+    (AppMix { stop, thread: Some(thread) }, RATE)
 }
 
 }

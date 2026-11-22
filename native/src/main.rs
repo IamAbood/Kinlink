@@ -119,9 +119,41 @@ fn main() {
     if args.iter().any(|a| a == "--padtest") {
         std::process::exit(padtest());
     }
+    if args.iter().any(|a| a == "--appaudiotest") {
+        // Lists apps playing sound, then counts audio chunks for 4 s with PCLONE_MUTE (one exe) muted.
+        let apps = audio::playing_apps();
+        println!("playing: {apps:?}");
+        if std::env::var_os("PCLONE_EACH").is_some() {
+            // Which app is actually making sound: each one alone for 2 s.
+            let names: Vec<String> = apps.iter().map(|a| a.1.clone()).collect();
+            for one in &names {
+                let others: Vec<String> = names.iter().filter(|n| *n != one).cloned().collect();
+                let n = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+                let n2 = n.clone();
+                let (h, _) = audio::start_app_mix(others, move |c| {
+                    let peak = c.iter().map(|x| (*x as i32).unsigned_abs()).max().unwrap_or(0);
+                    n2.fetch_max(peak, std::sync::atomic::Ordering::SeqCst);
+                });
+                std::thread::sleep(Duration::from_secs(2));
+                drop(h);
+                println!("{one} alone: loudest sample {} (of 32767)", n.load(std::sync::atomic::Ordering::SeqCst));
+            }
+            std::process::exit(0);
+        }
+        let muted: Vec<String> = std::env::var("PCLONE_MUTE").map(|m| vec![m]).unwrap_or_default();
+        let n = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let n2 = n.clone();
+        let (h, _) = audio::start_app_mix(muted.clone(), move |_| {
+            n2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+        std::thread::sleep(Duration::from_secs(5));
+        drop(h);
+        println!("muted {muted:?}: {} sound chunks in 5 s", n.load(std::sync::atomic::Ordering::SeqCst));
+        std::process::exit(0);
+    }
     if args.iter().any(|a| a == "--toolstest") {
         // In-process host + guest: games list, all-screens picture.
-        let cfg = host::HostConfig { name: "host".into(), port: 47895, max_mbps: 20, fps: 30, hardware: true, upnp: false, record: false };
+        let cfg = host::HostConfig { name: "host".into(), port: 47895, max_mbps: 20, fps: 30, hardware: true, upnp: false, record: false, muted_apps: Vec::new() };
         let h = host::Host::start(cfg).unwrap();
         let (ce, he) = (crypto::Ephemeral::new(), crypto::Ephemeral::new());
         h.handle().prepare(he.cipher(&ce.public, 79, false), host::Perms { mouse: true, keyboard: true, gamepad: false }, "g#0001".into());
@@ -148,7 +180,7 @@ fn main() {
     }
     if args.iter().any(|a| a == "--webtest") {
         // View-only host + a browser link; prints who's connected for 3 minutes.
-        let cfg = host::HostConfig { name: "host".into(), port: 47896, max_mbps: 8, fps: 30, hardware: true, upnp: false, record: std::env::var_os("PCLONE_RECORD").is_some() };
+        let cfg = host::HostConfig { name: "host".into(), port: 47896, max_mbps: 8, fps: 30, hardware: true, upnp: false, record: std::env::var_os("PCLONE_RECORD").is_some(), muted_apps: std::env::var("PCLONE_MUTE").map(|m| vec![m]).unwrap_or_default() };
         let h = host::Host::start(cfg).unwrap();
         let link = h.handle().web_link(host::Perms { mouse: false, keyboard: false, gamepad: false }, std::env::var_os("PCLONE_PARTY").is_some());
         let local = link.replacen(crate::web::PAGE, "http://localhost:8765/", 1);
@@ -255,7 +287,7 @@ fn helpertest() -> i32 {
     if args_has("--stream") {
         // Session whose video comes from the SYSTEM helper (PCLONE_FORCE_HELPER), no UAC needed.
         unsafe { std::env::set_var("PCLONE_FORCE_HELPER", "1") };
-        let cfg = host::HostConfig { name: "host".into(), port: 47897, max_mbps: 20, fps: 30, hardware: true, upnp: false, record: false };
+        let cfg = host::HostConfig { name: "host".into(), port: 47897, max_mbps: 20, fps: 30, hardware: true, upnp: false, record: false, muted_apps: Vec::new() };
         let h = host::Host::start(cfg).unwrap();
         let (ce, he) = (crypto::Ephemeral::new(), crypto::Ephemeral::new());
         h.handle().prepare(he.cipher(&ce.public, 78, false), host::Perms { mouse: false, keyboard: false, gamepad: false }, "g#0001".into());
@@ -278,7 +310,7 @@ fn helpertest() -> i32 {
     }
     // Optionally run a real encrypted session so the guest's screenshot shows what it streamed.
     let session = args_has("--session").then(|| {
-        let cfg = host::HostConfig { name: "host".into(), port: 47898, max_mbps: 20, fps: 30, hardware: true, upnp: false, record: false };
+        let cfg = host::HostConfig { name: "host".into(), port: 47898, max_mbps: 20, fps: 30, hardware: true, upnp: false, record: false, muted_apps: Vec::new() };
         let h = host::Host::start(cfg).unwrap();
         let (ce, he) = (crypto::Ephemeral::new(), crypto::Ephemeral::new());
         h.handle().prepare(he.cipher(&ce.public, 77, false), host::Perms { mouse: true, keyboard: true, gamepad: false }, "g#0001".into());
@@ -471,7 +503,7 @@ fn padtest() -> i32 {
 /// Encrypted multi-guest loopback: two guests with different permissions, kick one mid-session.
 /// Run with PCLONE_DRY_INPUT=1 (host logs input instead of injecting).
 fn selftest(software: bool) -> i32 {
-    let cfg = host::HostConfig { name: "host".into(), port: 47899, max_mbps: 20, fps: 60, hardware: !software, upnp: false, record: false };
+    let cfg = host::HostConfig { name: "host".into(), port: 47899, max_mbps: 20, fps: 60, hardware: !software, upnp: false, record: false, muted_apps: Vec::new() };
     let h = match host::Host::start(cfg) {
         Ok(h) => h,
         Err(e) => {

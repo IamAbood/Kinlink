@@ -345,6 +345,11 @@ pub fn get(en: &str) -> Option<&'static str> {
         "is online" => "متصل الآن",
         "Friend request" => "طلب صداقة",
         "{} wants to be your friend" => "{} يريد أن يكون صديقك",
+        "Guests don't hear these apps" => "الضيوف لا يسمعون هذه التطبيقات",
+        "Let guests hear it again" => "السماح للضيوف بسماعه مجددًا",
+        "Add an app playing sound…" => "أضف تطبيقًا يصدر صوتًا…",
+        "Nothing is playing sound right now" => "لا يوجد شيء يصدر صوتًا الآن",
+        "or type: Spotify.exe" => "أو اكتب: Spotify.exe",
         _ => return None,
     })
 }
