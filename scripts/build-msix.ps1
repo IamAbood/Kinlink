@@ -4,7 +4,7 @@
 # Identity values: from Partner Center > the app > Product identity. Placeholders work for local tests.
 param(
     [string]$Exe = "",
-    [string]$Version = "",  # e.g. 0.29.8.0; default: from nativeCargo.toml
+    [string]$Version = "",  # e.g. 0.29.8.0; default: from native/Cargo.toml
     [string]$Name = "AlsaouServices.KinLinkRemote",
     [string]$Publisher = "CN=22BDAD11-4BA0-483F-8AF0-6138E28D0E8C",
     [string]$PublisherDisplay = "Alsaou Services",
