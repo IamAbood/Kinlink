@@ -76,6 +76,40 @@ fn ours_in_front() -> bool {
     }
 }
 
+/// "explorer.exe" etc. for a window handle (diagnostics only).
+fn window_exe(hwnd: isize) -> String {
+    use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
+    unsafe {
+        let mut pid = 0;
+        GetWindowThreadProcessId(HWND(hwnd as _), Some(&mut pid));
+        let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else { return format!("pid {pid}") };
+        let (mut buf, mut len) = ([0u16; 512], 512u32);
+        let ok = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut len).is_ok();
+        let _ = windows::Win32::Foundation::CloseHandle(h);
+        if !ok {
+            return format!("pid {pid}");
+        }
+        let path = String::from_utf16_lossy(&buf[..len as usize]);
+        path.rsplit('\\').next().unwrap_or_default().to_string()
+    }
+}
+
+/// Logs the installed antivirus / security products once: they are what usually blocks the hook.
+pub fn log_security_software() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        std::thread::spawn(|| {
+            use std::os::windows::process::CommandExt;
+            let out = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-Command", "(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction SilentlyContinue).displayName -join ', '"])
+                .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+                .output();
+            let names = out.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+            crate::plog!("keyboard: security software on this PC: {}", if names.is_empty() { "(none reported)" } else { &names });
+        });
+    });
+}
+
 /// Installs the hook on its own thread with a plain GetMessage loop. Windows only calls a
 /// low-level hook while its thread pumps messages, and silently removes hooks that don't
 /// answer in time; the UI thread's wait doesn't reliably service them.
@@ -127,10 +161,12 @@ pub fn missed_key() {
     }
     *last = Some(std::time::Instant::now());
     let fg = unsafe { GetForegroundWindow() }.0 as isize;
+    let last = LAST_FG.load(Relaxed);
     crate::plog!(
-        "keyboard: a key got past the hook during the session; reinstalling it (hook saw {} keys, last with foreground {:#x} extra {:#x}; ours {:#x}, now in front {:#x})",
+        "keyboard: a key got past the hook during the session; reinstalling it (hook saw {} keys, last with foreground {:#x} [{}] extra {:#x}; ours {:#x}, now in front {:#x})",
         CALLS.load(Relaxed),
-        LAST_FG.load(Relaxed),
+        last,
+        window_exe(last),
         LAST_EXTRA.load(Relaxed),
         HWND_VAL.load(Relaxed),
         fg

@@ -350,6 +350,7 @@ pub fn get(en: &str) -> Option<&'static str> {
         "Add an app playing sound…" => "أضف تطبيقًا يصدر صوتًا…",
         "Nothing is playing sound right now" => "لا يوجد شيء يصدر صوتًا الآن",
         "or type: Spotify.exe" => "أو اكتب: Spotify.exe",
+        "Not available in the Microsoft Store version. Get Kinlink from github.com/IamAbood/Kinlink for it." => "غير متاح في نسخة متجر مايكروسوفت. نزّل Kinlink من github.com/IamAbood/Kinlink للحصول عليه.",
         _ => return None,
     })
 }

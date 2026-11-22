@@ -90,7 +90,8 @@ pub fn run(friends_online: bool) -> Report {
         .map(|o| String::from_utf8_lossy(&o.stdout).to_lowercase())
         .unwrap_or_default();
     let exe = std::env::current_exe().map(|p| p.display().to_string().to_lowercase()).unwrap_or_default();
-    match (allowed.lines().any(|p| p.trim() == exe), allowed.trim().is_empty()) {
+    match (allowed.lines().any(|p| p.trim() == exe) || crate::pkg::packaged(), allowed.trim().is_empty()) {
+        (true, _) if crate::pkg::packaged() => line(&mut l, true, "Windows Firewall: allowed by the Store package"),
         (true, _) => line(&mut l, true, "Windows Firewall: this app is allowed"),
         (false, false) => line(&mut l, false, "Windows Firewall: an older copy of the app is allowed, not this one (use the button in Settings)"),
         (false, true) => line(&mut l, false, "Windows Firewall: not allowed yet (use the button in Settings; may block friends)"),

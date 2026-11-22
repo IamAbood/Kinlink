@@ -19,6 +19,9 @@ fn reg_sz(key: &HSTRING, name: PCWSTR, value: &str) {
 
 /// Registers the display name + icon toasts show. Safe to call on every launch.
 pub fn register() {
+    if crate::pkg::packaged() {
+        return; // the package gives us a name, icon and Start menu tile
+    }
     let key = HSTRING::from(format!("Software\\Classes\\AppUserModelId\\{AUMID}"));
     reg_sz(&key, w!("DisplayName"), "Kinlink");
     if let Some(dir) = crate::settings::data_dir() {
@@ -54,7 +57,11 @@ pub fn toast(title: &str, body: &str) {
             let doc = XmlDocument::new()?;
             doc.LoadXml(&HSTRING::from(xml))?;
             let t = ToastNotification::CreateToastNotification(&doc)?;
-            ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(AUMID))?.Show(&t)
+            if crate::pkg::packaged() {
+                ToastNotificationManager::CreateToastNotifier()?.Show(&t)
+            } else {
+                ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(AUMID))?.Show(&t)
+            }
         })();
         if let Err(e) = r {
             crate::plog!("toast failed: {e}");

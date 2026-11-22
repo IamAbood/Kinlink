@@ -34,7 +34,7 @@ pub fn create(lnk: &Path, args: &str, description: &str, aumid: Option<&str>) ->
     let (lnk, args, description, aumid) = (lnk.to_path_buf(), args.to_string(), description.to_string(), aumid.map(str::to_string));
     std::thread::spawn(move || unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let exe = crate::pkg::launcher().ok_or("can't find the app")?;
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).map_err(|e| e.to_string())?;
         let exe_h = HSTRING::from(exe.as_os_str());
         link.SetPath(&exe_h).map_err(|e| e.to_string())?;

@@ -341,9 +341,9 @@ impl App {
         if self.s.hosting {
             self.start_host();
         }
-        // Check GitHub Releases now and every 6 hours.
+        // Check GitHub Releases now and every 6 hours (the Store updates its own build).
         let (upd, wake) = (self.update.clone(), self.waker());
-        std::thread::spawn(move || loop {
+        std::thread::spawn(move || while !crate::pkg::packaged() {
             if let Ok(Some(r)) = crate::updater::check() {
                 let mut u = upd.lock().unwrap();
                 if matches!(*u, Update::None | Update::Failed(_)) {
@@ -801,6 +801,7 @@ impl App {
                 self.mods = [false; 3];
                 if kbhook::is_active() {
                     crate::plog!("keyboard: lost focus during the session (Alt+Tab got past the hook?)");
+                    kbhook::log_security_software();
                     kbhook::rehook();
                 }
             }
@@ -2211,7 +2212,8 @@ impl App {
                                         });
                                         self.nettest = Some(slot);
                                     }
-                                    if ui.button(tr("Allow through firewall")).on_hover_text(tr("One-time; asks for admin permission")).clicked() {
+                                    // The Store package brings its own firewall rule.
+                                    if !crate::pkg::packaged() && ui.button(tr("Allow through firewall")).on_hover_text(tr("One-time; asks for admin permission")).clicked() {
                                         allow_firewall();
                                     }
                                 });
@@ -2220,7 +2222,10 @@ impl App {
                                 ui.set_width(ui.available_width());
                                 t::section(ui, &tr("Lock screen & admin prompts"));
                                 let (installed, running) = crate::syshelper::service_state();
-                                if installed && crate::syshelper::helper_is_stale() {
+                                if crate::pkg::packaged() {
+                                    // Store apps can't install services.
+                                    para(ui, &tl("Not available in the Microsoft Store version. Get Kinlink from github.com/IamAbood/Kinlink for it."), 12.0, t::SOFT());
+                                } else if installed && crate::syshelper::helper_is_stale() {
                                     para(ui, &tl("The helper belongs to another copy of Kinlink (an old version or a moved file), so it won't work with this one."), 12.0, t::DANGER());
                                     ui.horizontal(|ui| {
                                         if t::primary(ui, &tr("Update helper (asks for admin)"), None, true).clicked() {
@@ -2485,7 +2490,11 @@ fn build_tray(wake: impl Fn() + Send + Sync + 'static) -> Option<(tray_icon::Tra
     let panic = MenuItem::new("Disconnect everyone", true, None);
     let restart = MenuItem::new("Check for updates", true, None);
     let quit = MenuItem::new("Quit", true, None);
-    menu.append_items(&[&open, &panic, &restart, &quit]).ok()?;
+    if crate::pkg::packaged() {
+        menu.append_items(&[&open, &panic, &quit]).ok()?; // the Store updates it
+    } else {
+        menu.append_items(&[&open, &panic, &restart, &quit]).ok()?;
+    }
     let icon = tray_icon::Icon::from_resource(1, Some((32, 32))).ok()?;
     let tray = TrayIconBuilder::new().with_menu(Box::new(menu)).with_menu_on_left_click(false).with_tooltip("Kinlink").with_icon(icon).build().ok()?;
     let (tx, rx) = channel();

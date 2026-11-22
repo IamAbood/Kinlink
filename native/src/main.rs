@@ -34,6 +34,7 @@ mod signal;
 mod stun;
 mod theme;
 mod syshelper;
+mod pkg;
 mod updater;
 mod web;
 mod games;
@@ -809,6 +810,16 @@ fn signaltest() -> i32 {
 fn alttabtest() -> i32 {
     use windows::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VK_MENU, VK_TAB};
     use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    // PCLONE_OWN_WINDOW: put a window of this process in front first, like a real session.
+    if std::env::var_os("PCLONE_OWN_WINDOW").is_some() {
+        use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, SetForegroundWindow, WINDOW_EX_STYLE, WS_OVERLAPPEDWINDOW, WS_VISIBLE};
+        unsafe {
+            let w = CreateWindowExW(WINDOW_EX_STYLE(0), windows::core::w!("STATIC"), windows::core::w!("kbtest"), WS_OVERLAPPEDWINDOW | WS_VISIBLE, 100, 100, 300, 200, None, None, None, None).unwrap();
+            let _ = SetForegroundWindow(w);
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        println!("own window in front: {}", unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(GetForegroundWindow(), None) } == unsafe { windows::Win32::System::Threading::GetCurrentThreadId() });
+    }
     let fg = unsafe { GetForegroundWindow() };
     let rx = kbhook::install(fg, || {});
     kbhook::set_active(true);

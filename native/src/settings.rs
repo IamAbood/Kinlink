@@ -100,6 +100,9 @@ const RUN_NAME: windows::core::PCWSTR = w!("ParsecCloneNative");
 /// Keeps "Start with Windows" pointing at this copy of the app (it may have been moved,
 /// renamed or updated) and switched on in Task Manager > Startup apps.
 pub fn refresh_autostart() {
+    if crate::pkg::packaged() {
+        return; // the startup task always points at the installed package
+    }
     set_autostart(true);
     // Task Manager's on/off switch lives here; 02 00.. = enabled.
     let enabled: [u8; 12] = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -116,12 +119,18 @@ pub fn refresh_autostart() {
 }
 
 pub fn autostart_enabled() -> bool {
+    if crate::pkg::packaged() {
+        return crate::pkg::startup_task(None);
+    }
     unsafe { RegGetValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_NAME, RRF_RT_REG_SZ, None, None, None).is_ok() }
 }
 
 /// Registers the exe to start minimized and hosting at login.
 /// Lets kinlink:// invite links open this app (per user, no admin needed).
 pub fn register_url_scheme() {
+    if crate::pkg::packaged() {
+        return; // declared in the package manifest
+    }
     let Ok(exe) = std::env::current_exe() else { return };
     let set = |key: &str, name: Option<&str>, value: &str| unsafe {
         let v = HSTRING::from(value);
@@ -135,6 +144,10 @@ pub fn register_url_scheme() {
 }
 
 pub fn set_autostart(on: bool) {
+    if crate::pkg::packaged() {
+        crate::pkg::startup_task(Some(on));
+        return;
+    }
     unsafe {
         if on {
             let Ok(exe) = std::env::current_exe() else { return };
