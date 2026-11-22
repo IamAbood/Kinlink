@@ -15,7 +15,6 @@ mod host;
 mod hotkey;
 mod input;
 mod kbhook;
-mod lan;
 mod mf;
 mod net;
 mod padout;
