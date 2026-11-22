@@ -95,6 +95,12 @@ pub fn missed_key() {
     }
     *last = Some(std::time::Instant::now());
     crate::plog!("keyboard: a key got past the hook during the session; reinstalling it");
+    rehook();
+}
+
+/// Puts the hook back fresh. Windows drops a hook without telling us, and Alt+Tab / Win never
+/// reach our window, so missed_key can't notice: also done at session start and on focus loss.
+pub fn rehook() {
     let t = HOOK_THREAD.load(Relaxed);
     if t != 0 {
         unsafe {

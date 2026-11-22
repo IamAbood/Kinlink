@@ -606,6 +606,7 @@ impl App {
         self.overlay_shown = true;
         self.message = None;
         kbhook::set_active(true);
+        kbhook::rehook();
         self.show_hint = !self.s.hint_seen;
         if !self.s.hint_seen {
             self.s.hint_seen = true;
@@ -798,6 +799,10 @@ impl App {
             WindowEvent::Focused(false) => {
                 c.input(Input::ReleaseAll);
                 self.mods = [false; 3];
+                if kbhook::is_active() {
+                    crate::plog!("keyboard: lost focus during the session (Alt+Tab got past the hook?)");
+                    kbhook::rehook();
+                }
             }
             _ => {}
         }
