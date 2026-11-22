@@ -1,6 +1,6 @@
 //! Host: approved friends join over encrypted, hole-punched UDP sessions. Several guests can be
 //! connected at once (couch co-op): the screen is encoded once and sent to everyone.
-use crate::capture::{monitors, Capturer};
+use crate::capture::{monitors, window_rect, Capturer, WindowCapturer};
 use crate::clip::Clip;
 use crate::files::{Progress, Transfers};
 use crate::codec::new_encoder;
@@ -98,6 +98,8 @@ struct Shared {
     pending: Mutex<HashMap<u64, Pending>>,
     keyframe: AtomicBool,
     monitor: AtomicU8,
+    /// The one window guests see (HWND), or 0 for a whole screen.
+    window: std::sync::atomic::AtomicIsize,
     bitrate: AtomicU32,
     audio_rate: AtomicU32,
     injector: Mutex<Injector>,
@@ -237,6 +239,7 @@ impl Host {
             pending: Mutex::new(HashMap::new()),
             keyframe: AtomicBool::new(false),
             monitor: AtomicU8::new(0),
+            window: std::sync::atomic::AtomicIsize::new(0),
             audio_rate: AtomicU32::new(0),
             injector: Mutex::new(Injector::default()),
             stun_wait: Mutex::new(None),
@@ -371,6 +374,16 @@ impl Host {
     }
 
     /// Panic button: disconnects every guest at once.
+    /// Show guests only this window (Some HWND), or the whole screen again (None).
+    pub fn share_window(&self, hwnd: Option<isize>) {
+        self.r.0.window.store(hwnd.unwrap_or(0), SeqCst);
+        self.r.0.keyframe.store(true, SeqCst);
+    }
+
+    pub fn shared_window(&self) -> Option<isize> {
+        Some(self.r.0.window.load(SeqCst)).filter(|&w| w != 0)
+    }
+
     pub fn kick_all(&self) {
         let sh = &self.r.0;
         for g in sh.web.lock().unwrap().iter() {
@@ -811,6 +824,7 @@ fn union_rect(all: &[Capturer]) -> windows::Win32::Foundation::RECT {
 
 fn video_loop(sh: Arc<Shared>) {
     let mut cap: Option<Capturer> = None;
+    let mut wcap: Option<WindowCapturer> = None;
     let mut enc: Option<Box<dyn crate::codec::VideoEncoder>> = None;
     let mut enc_size = (0, 0);
     let (mut cur_monitor, mut cur_bitrate) = (u8::MAX, 0);
@@ -846,6 +860,7 @@ fn video_loop(sh: Arc<Shared>) {
             }
             all.clear();
             cap = None;
+            wcap = None;
             enc = None;
             sent_shape = u32::MAX;
             *sh.helper.lock().unwrap() = None; // only talk to the helper during sessions
@@ -887,7 +902,52 @@ fn video_loop(sh: Arc<Shared>) {
                 Some(Ok(None)) => {}
                 Some(Err(_)) | None => thread::sleep(Duration::from_millis(50)),
             }
+        } else if sh.window.load(SeqCst) != 0 {
+            // One window only. If it closes, guests keep the last picture: never fall back to
+            // showing the whole screen on its own.
+            let hwnd = sh.window.load(SeqCst);
+            (cap, cur_monitor) = (None, u8::MAX);
+            all.clear();
+            let Some(r) = window_rect(hwnd) else {
+                wcap = None;
+                sh.status.lock().unwrap().error = Some("The shared window was closed. Pick what guests see on This PC.".into());
+                thread::sleep(Duration::from_millis(300));
+                continue;
+            };
+            if wcap.as_ref().is_none_or(|c| c.hwnd != hwnd) {
+                match WindowCapturer::new(hwnd) {
+                    Ok(c) => {
+                        wcap = Some(c);
+                        frame.clear();
+                        sh.status.lock().unwrap().error = None;
+                        sh.keyframe.store(true, SeqCst);
+                    }
+                    Err(e) => {
+                        wcap = None;
+                        sh.status.lock().unwrap().error = Some(format!("Sharing the window: {e:#}"));
+                        thread::sleep(Duration::from_millis(500));
+                        continue;
+                    }
+                }
+            }
+            sh.injector.lock().unwrap().set_monitor(r); // guests' mouse stays on the window
+            let c = wcap.as_mut().unwrap();
+            let wait = next_slot.saturating_duration_since(Instant::now()).max(Duration::from_millis(1));
+            match c.next_frame(wait.as_millis() as u32, &mut frame) {
+                Ok(new) => dirty |= new,
+                Err(_) => {
+                    wcap = None;
+                    thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+            }
+            if sh.keyframe.load(SeqCst) {
+                // The cursor is part of the window image here; hide the guest-drawn one.
+                sh.broadcast(&Msg::CursorPos { x: 0.0, y: 0.0, visible: false, version: sent_shape });
+            }
+            (fw, fh) = (c.width, c.height);
         } else if sh.monitor.load(SeqCst) == proto::ALL_SCREENS {
+            wcap = None;
             cap = None;
             cur_monitor = u8::MAX;
             if all.is_empty() {
@@ -943,6 +1003,7 @@ fn video_loop(sh: Arc<Shared>) {
             (fw, fh) = (uw, uh);
         } else {
         all.clear();
+        wcap = None;
         let mon = sh.monitor.load(SeqCst);
         if mon != cur_monitor {
             cap = None;

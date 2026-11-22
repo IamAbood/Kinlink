@@ -150,6 +150,8 @@ pub struct App {
     peer: String,
     message: Option<(String, Instant)>,
     add_text: String,
+    /// Kinlink PCs heard on this network.
+    lan: crate::lan::Lan,
     add_err: Option<String>,
     rename_text: String,
     page: Page,
@@ -243,6 +245,7 @@ impl App {
             peer: String::new(),
             message: None,
             add_text: String::new(),
+            lan: crate::lan::Lan::start(),
             add_err: None,
             rename_text: String::new(),
             page: Page::Friends,
@@ -1637,6 +1640,8 @@ impl App {
             }
         });
 
+        // Only PCs that let friends connect show up on the network.
+        self.lan.set_announce(self.s.hosting.then(|| sig.id()));
         // ------------------------------------------------ pages
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t::BG()).inner_margin(egui::Margin { left: 30, right: 30, top: 24, bottom: 8 })).show(root, |ui| {
             egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
@@ -1704,6 +1709,25 @@ impl App {
                             if o.conflict {
                                 para(ui, &tl("Two different PCs answered for this ID. Only accept if the safety code matches on your friend's screen."), 13.0, t::DANGER());
                             }
+                        }
+                        let pending = sig.outgoing();
+                        let nearby: Vec<String> = self.lan.nearby().into_iter().filter(|id| !friends.iter().any(|(f, _)| f.id() == *id) && !pending.contains(id)).collect();
+                        if !nearby.is_empty() {
+                            t::section(ui, &tr("On this network"));
+                            t::card().show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                for id in &nearby {
+                                    ui.horizontal(|ui| {
+                                        dot(ui, t::MINT());
+                                        ui.label(RichText::new(id).font(egui::FontId::new(14.0, t::bold())));
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            if t::primary(ui, &tr("Add"), Some(Icon::Plus), true).clicked() {
+                                                self.add_err = sig.add_friend(id).err();
+                                            }
+                                        });
+                                    });
+                                }
+                            });
                         }
                         friends.sort_by_key(|(f, on)| (!on, f.display().to_lowercase()));
                         if friends.is_empty() {
@@ -1784,6 +1808,22 @@ impl App {
                             if !st.stats.is_empty() {
                                 ui.label(RichText::new(&st.stats).size(11.5).color(t::MUTED()));
                             }
+                            ui.horizontal(|ui| {
+                                ui.label(tr("Guests see"));
+                                let cur = h.shared_window();
+                                let short = |t: String| if t.chars().count() > 60 { t.chars().take(57).collect::<String>() + "…" } else { t };
+                                let label = cur.map_or_else(|| tr("The whole screen"), |w| short(crate::capture::window_title(w)));
+                                egui::ComboBox::from_id_salt("sharewin").selected_text(label).width(330.0).show_ui(ui, |ui| {
+                                    if ui.selectable_label(cur.is_none(), tr("The whole screen")).clicked() {
+                                        h.share_window(None);
+                                    }
+                                    for (w, title) in crate::capture::windows() {
+                                        if ui.selectable_label(cur == Some(w), short(title)).clicked() {
+                                            h.share_window(Some(w));
+                                        }
+                                    }
+                                });
+                            });
                             if !st.clients.is_empty() {
                                 t::section(ui, &tr("Guests"));
                                 t::card().show(ui, |ui| {

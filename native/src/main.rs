@@ -15,6 +15,7 @@ mod host;
 mod hotkey;
 mod input;
 mod kbhook;
+mod lan;
 mod mf;
 mod net;
 mod padout;
@@ -123,6 +124,29 @@ fn main() {
         }
         println!("{r}");
         std::process::exit(0);
+    }
+    if args.iter().any(|a| a == "--wintest") {
+        // Captures the first shareable window for a moment and reports what came out.
+        let wins = capture::windows();
+        println!("{} windows, e.g. {:?}", wins.len(), wins.iter().take(5).map(|w| &w.1).collect::<Vec<_>>());
+        let Some((w, title)) = wins.first().cloned() else { std::process::exit(1) };
+        let mut c = capture::WindowCapturer::new(w).expect("capture");
+        let (mut buf, mut got) = (Vec::new(), false);
+        for _ in 0..20 {
+            got |= c.next_frame(100, &mut buf).expect("frame");
+        }
+        let lit = buf.chunks(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 30).count();
+        println!("{title}: frame {got}, {}x{}, rect {:?}, {}% non-black", c.width, c.height, capture::window_rect(w), lit * 100 / (buf.len() / 4).max(1));
+        std::process::exit(if got && c.width > 0 { 0 } else { 1 });
+    }
+    if args.iter().any(|a| a == "--lantest") {
+        let (a, b) = (lan::Lan::start(), lan::Lan::start());
+        a.set_announce(Some("tester_a#1111-AAAAAA".into()));
+        b.set_announce(Some("tester_b#2222-BBBBBB".into()));
+        std::thread::sleep(Duration::from_secs(4));
+        let (na, nb) = (a.nearby(), b.nearby());
+        println!("a hears {na:?}, b hears {nb:?}");
+        std::process::exit(if nb.contains(&"tester_a#1111-AAAAAA".to_string()) && na.contains(&"tester_b#2222-BBBBBB".to_string()) { 0 } else { 1 });
     }
     if args.iter().any(|a| a == "--alttabtest") {
         std::process::exit(alttabtest());
