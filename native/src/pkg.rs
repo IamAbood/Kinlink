@@ -26,6 +26,13 @@ pub fn launcher() -> Option<PathBuf> {
     std::env::current_exe().ok()
 }
 
+/// The Store build was started by its startup task (at login), so it should go to the tray like
+/// `--minimized` (a startup task can't pass arguments).
+pub fn started_at_login() -> bool {
+    use windows::ApplicationModel::Activation::ActivationKind;
+    packaged() && windows::ApplicationModel::AppInstance::GetActivatedEventArgs().and_then(|a| a.Kind()).is_ok_and(|k| k == ActivationKind::StartupTask)
+}
+
 /// Start with Windows for the Store build. None = just read. Returns whether it's on.
 /// WinRT calls run on their own thread (the UI thread is single-threaded COM).
 pub fn startup_task(set: Option<bool>) -> bool {

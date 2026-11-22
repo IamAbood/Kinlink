@@ -114,6 +114,16 @@ fn main() {
         std::thread::sleep(Duration::from_secs(2));
         return;
     }
+    if args.iter().any(|a| a == "--startuptest") {
+        // Store build: the startup task must switch on and off (results go to the log).
+        let (a, b, c) = (pkg::startup_task(None), pkg::startup_task(Some(true)), pkg::startup_task(Some(false)));
+        let r = format!("packaged {} before {a} on {b} off {c} -> {}", pkg::packaged(), if pkg::packaged() && b && !c { "PASS" } else { "FAIL" });
+        if let Some(f) = std::env::var_os("PCLONE_OUT") {
+            let _ = std::fs::write(f, &r);
+        }
+        println!("{r}");
+        std::process::exit(0);
+    }
     if args.iter().any(|a| a == "--alttabtest") {
         std::process::exit(alttabtest());
     }
@@ -215,7 +225,7 @@ LOCAL {local}");
         let _ = SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
     }
     let el = winit::event_loop::EventLoop::<()>::with_user_event().build().expect("event loop");
-    let mut app = app::App::new(el.create_proxy(), args.iter().any(|a| a == "--minimized"), arg("--connect-friend"));
+    let mut app = app::App::new(el.create_proxy(), args.iter().any(|a| a == "--minimized") || pkg::started_at_login(), arg("--connect-friend"));
     el.run_app(&mut app).expect("run");
 }
 

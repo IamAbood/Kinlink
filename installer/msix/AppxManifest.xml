@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Microsoft Store package for Kinlink. scripts/build-msix.ps1 fills in the $...$ values.
+     Identity values come from Partner Center (Product identity page) once the name is reserved. -->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:desktop2="http://schemas.microsoft.com/appx/manifest/desktop/windows10/2"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap3 desktop desktop2 rescap">
+
+  <Identity Name="$NAME$" Publisher="$PUBLISHER$" Version="$VERSION$" ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>Kinlink</DisplayName>
+    <PublisherDisplayName>$PUBLISHER_DISPLAY$</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="Kinlink" Executable="Kinlink.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="Kinlink" Description="Use your PC from anywhere, play together with friends."
+        BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+      </uap:VisualElements>
+      <Extensions>
+        <!-- Start with Windows (pkg::startup_task turns it on; off until the user agrees). -->
+        <desktop:Extension Category="windows.startupTask" Executable="Kinlink.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="KinlinkStartup" Enabled="false" DisplayName="Kinlink" />
+        </desktop:Extension>
+        <!-- kinlink:// invite links. -->
+        <uap3:Extension Category="windows.protocol">
+          <uap3:Protocol Name="kinlink" Parameters="--connect-friend &quot;%1&quot;">
+            <uap:DisplayName>Kinlink invite</uap:DisplayName>
+          </uap3:Protocol>
+        </uap3:Extension>
+        <!-- %LOCALAPPDATA%\Microsoft\WindowsApps\Kinlink.exe: a fixed path for friend shortcuts. -->
+        <uap3:Extension Category="windows.appExecutionAlias" Executable="Kinlink.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap3:AppExecutionAlias>
+            <desktop:ExecutionAlias Alias="Kinlink.exe" />
+          </uap3:AppExecutionAlias>
+        </uap3:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Extensions>
+    <!-- Friends connect directly (UDP hole punching), so incoming traffic must be allowed. -->
+    <desktop2:Extension Category="windows.firewallRules">
+      <desktop2:FirewallRules Executable="Kinlink.exe">
+        <desktop2:Rule Direction="in" IPProtocol="UDP" Profile="all" />
+        <desktop2:Rule Direction="in" IPProtocol="TCP" Profile="all" />
+      </desktop2:FirewallRules>
+    </desktop2:Extension>
+  </Extensions>
+
+  <Capabilities>
+    <Capability Name="internetClient" />
+    <Capability Name="internetClientServer" />
+    <Capability Name="privateNetworkClientServer" />
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>
