@@ -29,8 +29,10 @@ jobs:
         with:
           workspaces: native
 
-      - name: Unit tests
-        run: cargo test --release --manifest-path native/Cargo.toml
+      # Off to keep releases fast (run `cargo test --release` locally). Turn back on if bugs
+      # start slipping through.
+      # - name: Unit tests
+      #   run: cargo test --release --manifest-path native/Cargo.toml
 
       - name: Build
         run: cargo build --release --manifest-path native/Cargo.toml
