@@ -22,12 +22,13 @@ pub const OUR_INPUT: usize = 0x5043_4C4E; // "PCLN"
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static ALLOW_INJECTED: AtomicBool = AtomicBool::new(false);
+static DEBUG: AtomicBool = AtomicBool::new(false);
 static HWND_VAL: AtomicIsize = AtomicIsize::new(0);
 static TX: Mutex<Option<(Sender<KeyEv>, Wake)>> = Mutex::new(None);
 
 unsafe extern "system" fn proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
-        if std::env::var_os("PCLONE_DEBUG").is_some() && code >= 0 {
+        if DEBUG.load(Relaxed) && code >= 0 {
             let k = &*(lp.0 as *const KBDLLHOOKSTRUCT);
             crate::plog!("HOOK scan={:#x} active={} fg_match={} injected={}", k.scanCode, ACTIVE.load(Relaxed), GetForegroundWindow().0 as isize == HWND_VAL.load(Relaxed), k.flags.0 & LLKHF_INJECTED.0 != 0);
         }
@@ -84,8 +85,14 @@ pub fn install(hwnd: HWND, wake: impl Fn() + Send + 'static) -> Receiver<KeyEv> 
     HWND_VAL.store(hwnd.0 as isize, Relaxed);
     // Test switch: lets simulated key presses through so the path can be tested automatically.
     ALLOW_INJECTED.store(std::env::var_os("PCLONE_HOOK_INJECTED").is_some(), Relaxed);
+    DEBUG.store(std::env::var_os("PCLONE_DEBUG").is_some(), Relaxed);
     std::thread::spawn(|| unsafe {
-        HOOK_THREAD.store(windows::Win32::System::Threading::GetCurrentThreadId(), Relaxed);
+        use windows::Win32::System::Threading::{GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL};
+        HOOK_THREAD.store(GetCurrentThreadId(), Relaxed);
+        // Windows skips (then silently removes) a hook that answers late. On a slow laptop busy
+        // decoding the stream, a normal-priority thread was too late every time Kinlink was in
+        // front, so Alt+Tab went local. The hook does almost nothing, so top priority is safe.
+        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
         let module = GetModuleHandleW(None).unwrap_or_default();
         let mut hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(proc), Some(module.into()), 0) {
             Ok(h) => h,
