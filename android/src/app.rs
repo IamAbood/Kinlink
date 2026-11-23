@@ -262,6 +262,7 @@ impl App {
                 let who = self.signal.as_ref().and_then(|s| s.friend(&from)).map(|f| f.display()).unwrap_or_default();
                 crate::mic::notify(notif_id(&from) ^ 0x5a5a, &who, &text);
             }
+            Event::RoomMessage { room, from, text } => crate::mic::notify(room as i32 & 0x3fff_ffff, &from, &text),
             Event::Cancelled { .. } => {}
             // The phone can't host: turn invite connections down.
             Event::GuestConnect { from, name, req, .. } => {

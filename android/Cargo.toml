@@ -1,6 +1,6 @@
 [package]
 name = "pclone-android"
-version = "0.31.0-beta"
+version = "0.32.0-beta"
 license = "MIT"
 authors = ["Abdulkareem Alsaou"]
 edition = "2024"

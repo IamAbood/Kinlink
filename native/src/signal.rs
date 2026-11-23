@@ -73,6 +73,28 @@ pub enum Sig {
     HelpRequest,
     /// A mini game: the whole move list so far (empty = an invite). See minigames.rs.
     Game { id: u64, kind: u8, moves: Vec<u8> },
+    /// Group chat: the room as the sender knows it, plus a message (empty text = only a room update).
+    RoomMsg { room: Room, id: u64, text: String, ts: u64 },
+    RoomAck { room: u64, id: u64 },
+}
+
+/// A group chat. No server: everyone in it messages everyone else directly.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Room {
+    pub id: u64,
+    pub name: String,
+    /// Everyone in it, me included: (name#tag, key).
+    pub members: Vec<(String, Pub)>,
+    /// Unix ms of the last change; the newest version wins.
+    pub rev: u64,
+}
+
+pub const ROOM_MAX: usize = 12;
+
+impl Room {
+    pub fn has(&self, p: &Pub) -> bool {
+        self.members.iter().any(|(_, m)| m == p)
+    }
 }
 
 /// An invite this PC handed out: one use, expires after an hour.
@@ -107,6 +129,12 @@ pub struct ChatMsg {
     pub ts: u64,
     /// Mine: the friend's app confirmed it. Theirs: always true.
     pub delivered: bool,
+    /// Group chats: who wrote it (name#tag).
+    #[serde(default)]
+    pub from: String,
+    /// Group chats, mine: members who haven't confirmed it yet.
+    #[serde(default)]
+    pub waiting: Vec<Pub>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -142,6 +170,8 @@ pub enum Event {
     HelpRequest(Pub),
     /// A friend's mini game state (invite or move).
     Game { from: Pub, id: u64, kind: u8, moves: Vec<u8> },
+    /// A group chat message (`from` = the writer's name#tag).
+    RoomMessage { room: u64, from: String, text: String },
 }
 
 /// Writes a friends file directly (test profiles).
@@ -191,6 +221,12 @@ struct State {
     joins: Vec<(String, Option<Pub>)>,
     /// When each unconfirmed chat message was last sent.
     msg_tries: HashMap<u64, Instant>,
+    /// Group chats (incl. ones I left: I'm not in `members`), their messages and unread counts.
+    rooms: Vec<Room>,
+    room_msgs: HashMap<u64, Vec<ChatMsg>>,
+    room_unread: HashMap<u64, u32>,
+    /// Room changes not yet confirmed: (room, their id, their key, last sent).
+    room_pending: Vec<(u64, String, Pub, Instant)>,
 }
 
 struct Inner {
@@ -231,6 +267,30 @@ fn now_s() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+}
+
+fn clean_room_name(s: &str) -> String {
+    let s: String = s.chars().filter(|c| !c.is_control()).take(40).collect();
+    if s.trim().is_empty() { "Group chat".into() } else { s.trim().to_string() }
+}
+
+fn push_capped(list: &mut Vec<ChatMsg>, m: ChatMsg) {
+    list.push(m);
+    if list.len() > 500 {
+        list.remove(0);
+    }
+}
+
+/// People who left a room don't need to confirm its messages any more.
+fn prune_waiting(st: &mut State, r: &Room) {
+    for m in st.room_msgs.get_mut(&r.id).into_iter().flatten().filter(|m| m.mine && !m.waiting.is_empty()) {
+        m.waiting.retain(|p| r.has(p));
+        m.delivered = m.waiting.is_empty();
+    }
+}
+
 fn inbox(id: &str) -> String {
     format!("{PREFIX}/{}/i", crypto::topic_for(id))
 }
@@ -253,7 +313,8 @@ impl Signal {
             ..Default::default()
         };
         let messages: Vec<(Pub, Vec<ChatMsg>)> = store.as_ref().and_then(|p| std::fs::read_to_string(p.with_file_name("messages.json")).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-        let st = State { messages: messages.into_iter().collect(), ..st };
+        let (rooms, room_msgs): (Vec<Room>, Vec<(u64, Vec<ChatMsg>)>) = store.as_ref().and_then(|p| std::fs::read_to_string(p.with_file_name("rooms.json")).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let st = State { messages: messages.into_iter().collect(), rooms, room_msgs: room_msgs.into_iter().collect(), ..st };
         let s = Signal(Arc::new(Inner {
             me,
             store,
@@ -388,7 +449,7 @@ impl Signal {
         if text.is_empty() {
             return;
         }
-        let m = ChatMsg { id: rand::random(), mine: true, text: text.clone(), ts: now_s(), delivered: false };
+        let m = ChatMsg { id: rand::random(), mine: true, text: text.clone(), ts: now_s(), delivered: false, from: String::new(), waiting: vec![] };
         let (id, ts) = (m.id, m.ts);
         {
             let mut st = self.0.st.lock().unwrap();
@@ -407,10 +468,192 @@ impl Signal {
         self.0.st.lock().unwrap().unread.get(with).copied().unwrap_or(0)
     }
     pub fn total_unread(&self) -> u32 {
-        self.0.st.lock().unwrap().unread.values().sum()
+        let st = self.0.st.lock().unwrap();
+        st.unread.values().sum::<u32>() + st.room_unread.values().sum::<u32>()
     }
     pub fn mark_read(&self, with: &Pub) {
         self.0.st.lock().unwrap().unread.remove(with);
+    }
+
+    // ------------------------------------------------------------ group chats
+
+    /// Group chats I'm in.
+    pub fn rooms(&self) -> Vec<Room> {
+        let me = self.0.me.public;
+        self.0.st.lock().unwrap().rooms.iter().filter(|r| r.has(&me)).cloned().collect()
+    }
+    pub fn room(&self, id: u64) -> Option<Room> {
+        self.rooms().into_iter().find(|r| r.id == id)
+    }
+    pub fn room_messages(&self, id: u64) -> Vec<ChatMsg> {
+        self.0.st.lock().unwrap().room_msgs.get(&id).cloned().unwrap_or_default()
+    }
+    pub fn room_unread(&self, id: u64) -> u32 {
+        self.0.st.lock().unwrap().room_unread.get(&id).copied().unwrap_or(0)
+    }
+    pub fn mark_room_read(&self, id: u64) {
+        self.0.st.lock().unwrap().room_unread.remove(&id);
+    }
+
+    /// Starts a group chat with some friends; returns its id.
+    pub fn create_room(&self, name: &str, friends: &[Pub]) -> u64 {
+        let mut members = vec![(self.id(), self.0.me.public)];
+        members.extend(friends.iter().filter_map(|p| self.friend(p)).map(|f| (f.id(), f.public)).take(ROOM_MAX - 1));
+        let room = Room { id: rand::random(), name: clean_room_name(name), members, rev: 0 };
+        let id = room.id;
+        self.set_room(room);
+        id
+    }
+
+    /// Adds friends to a group chat.
+    pub fn add_to_room(&self, id: u64, friends: &[Pub]) {
+        let Some(mut r) = self.room(id) else { return };
+        for f in friends.iter().filter_map(|p| self.friend(p)) {
+            if !r.has(&f.public) && r.members.len() < ROOM_MAX {
+                r.members.push((f.id(), f.public));
+            }
+        }
+        self.set_room(r);
+    }
+
+    pub fn leave_room(&self, id: u64) {
+        let Some(mut r) = self.room(id) else { return };
+        let me = self.0.me.public;
+        r.members.retain(|(_, p)| *p != me);
+        {
+            let mut st = self.0.st.lock().unwrap();
+            st.room_msgs.remove(&id);
+            st.room_unread.remove(&id);
+        }
+        self.set_room(r);
+    }
+
+    /// Saves a changed room and tells everyone who was or is in it.
+    fn set_room(&self, mut r: Room) {
+        r.rev = now_ms();
+        let tell: Vec<(String, Pub)> = {
+            let mut st = self.0.st.lock().unwrap();
+            let mut tell = r.members.clone();
+            if let Some(old) = st.rooms.iter_mut().find(|x| x.id == r.id) {
+                tell.extend(old.members.iter().filter(|(_, p)| !r.has(p)).cloned());
+                *old = r.clone();
+            } else {
+                st.rooms.push(r.clone());
+            }
+            prune_waiting(&mut st, &r);
+            tell.retain(|(_, p)| *p != self.0.me.public);
+            // ponytail: kept in memory only; a change not confirmed before quitting reaches people with the next message.
+            st.room_pending.retain(|(room, ..)| *room != r.id);
+            st.room_pending.extend(tell.iter().map(|(id, p)| (r.id, id.clone(), *p, Instant::now())));
+            tell
+        };
+        self.save_rooms();
+        for (id, p) in &tell {
+            self.send_to_id(id, p, Sig::RoomMsg { room: r.clone(), id: r.rev, text: String::new(), ts: 0 });
+        }
+        (self.0.wake)();
+    }
+
+    /// Sends a group chat message (re-sent to each member until their app confirms it).
+    pub fn send_room(&self, id: u64, text: &str) {
+        let text: String = text.trim().chars().take(2000).collect();
+        let Some(r) = self.room(id) else { return };
+        if text.is_empty() {
+            return;
+        }
+        let me = self.0.me.public;
+        let others: Vec<Pub> = r.members.iter().map(|(_, p)| *p).filter(|p| *p != me).collect();
+        let m = ChatMsg { id: rand::random(), mine: true, text: text.clone(), ts: now_s(), delivered: others.is_empty(), from: self.id(), waiting: others.clone() };
+        let (mid, ts) = (m.id, m.ts);
+        {
+            let mut st = self.0.st.lock().unwrap();
+            push_capped(st.room_msgs.entry(id).or_default(), m);
+            st.msg_tries.insert(mid, Instant::now());
+        }
+        self.save_rooms();
+        for p in others {
+            self.room_send(&r, &p, Sig::RoomMsg { room: r.clone(), id: mid, text: text.clone(), ts });
+        }
+    }
+
+    /// Sends to a room member (they may not be my friend).
+    fn room_send(&self, r: &Room, to: &Pub, sig: Sig) {
+        let id = self.friend(to).map(|f| f.id()).or_else(|| r.members.iter().find(|(_, p)| p == to).map(|(i, _)| i.clone()));
+        if let Some(id) = id {
+            self.send_to_id(&id, to, sig);
+        }
+    }
+
+    fn save_rooms(&self) {
+        if let Some(p) = &self.0.store {
+            let st = self.0.st.lock().unwrap();
+            let all = (&st.rooms, st.room_msgs.iter().collect::<Vec<_>>());
+            let _ = std::fs::write(p.with_file_name("rooms.json"), serde_json::to_string(&all).unwrap_or_default());
+        }
+    }
+
+    fn on_room_msg(&self, from: Pub, room: Room, id: u64, text: String, ts: u64) {
+        let me = self.0.me.public;
+        if room.members.len() > ROOM_MAX || room.members.iter().any(|(i, p)| crypto::parse_id(i).is_none_or(|(n, t)| crypto::tag_for(&n, p) != t)) {
+            return; // every id must match its key
+        }
+        // Their id: from the room they sent, my copy of it (they may have just left) or my friends.
+        let mine = self.0.st.lock().unwrap().rooms.iter().find(|r| r.id == room.id).map(|r| r.members.clone()).unwrap_or_default();
+        let Some(from_id) = room.members.iter().chain(&mine).find(|(_, p)| *p == from).map(|(i, _)| i.clone()).or_else(|| self.friend(&from).map(|f| f.id())) else { return };
+        let is_friend = self.friend(&from).is_some();
+        let (current, reply, joined) = {
+            let mut st = self.0.st.lock().unwrap();
+            match st.rooms.iter().position(|r| r.id == room.id) {
+                // A room I don't know: only a friend can add me to one.
+                None if room.has(&me) && room.has(&from) && is_friend => {
+                    let r = Room { name: clean_room_name(&room.name), ..room.clone() };
+                    st.rooms.push(r.clone());
+                    (Some(r), None, true)
+                }
+                None => return,
+                Some(i) if !(st.rooms[i].has(&from) || room.has(&from)) => return,
+                Some(i) if room.rev > st.rooms[i].rev => {
+                    let r = Room { name: clean_room_name(&room.name), ..room.clone() };
+                    let joined = !st.rooms[i].has(&me) && r.has(&me);
+                    st.rooms[i] = r.clone();
+                    prune_waiting(&mut st, &r);
+                    (r.has(&me).then(|| r.clone()), None, joined)
+                }
+                // They have an older version (missed a change, e.g. that I left): send them mine.
+                Some(i) if room.rev < st.rooms[i].rev => (st.rooms[i].has(&me).then(|| st.rooms[i].clone()), Some(st.rooms[i].clone()), false),
+                Some(i) => (st.rooms[i].has(&me).then(|| st.rooms[i].clone()), None, false),
+            }
+        };
+        if let Some(r) = reply {
+            self.send_to_id(&from_id, &from, Sig::RoomMsg { id: r.rev, room: r, text: String::new(), ts: 0 });
+        }
+        if joined {
+            self.event(Event::Toast(format!("{from_id} added you to the group chat \"{}\"", clean_room_name(&room.name))));
+        }
+        self.save_rooms();
+        (self.0.wake)();
+        // Confirms the message, or for a room change (no text) its version.
+        self.send_to_id(&from_id, &from, Sig::RoomAck { room: room.id, id });
+        if text.is_empty() {
+            return;
+        }
+        let Some(r) = current else { return }; // not in it (left): just confirm so they stop re-sending
+        let text: String = text.chars().take(2000).collect();
+        let new = {
+            let mut st = self.0.st.lock().unwrap();
+            let list = st.room_msgs.entry(r.id).or_default();
+            let new = !list.iter().any(|m| m.id == id && m.from == from_id);
+            if new {
+                push_capped(list, ChatMsg { id, mine: false, text: text.clone(), ts, delivered: true, from: from_id.clone(), waiting: vec![] });
+                list.sort_by_key(|m| m.ts); // late arrivals (they were offline) go in their place
+                *st.room_unread.entry(r.id).or_default() += 1;
+            }
+            new
+        };
+        if new {
+            self.save_rooms();
+            self.event(Event::RoomMessage { room: r.id, from: from_id, text });
+        }
     }
 
     fn save(&self) {
@@ -679,6 +922,24 @@ impl Signal {
             crate::plog!("signal: got {} from {who}", kind(&sig));
         }
         match sig {
+            // Group chats: members needn't be my friends (checked inside).
+            Sig::RoomMsg { room, id, text, ts } => self.on_room_msg(from, room, id, text, ts),
+            Sig::RoomAck { room, id } => {
+                let changed = {
+                    let mut st = self.0.st.lock().unwrap();
+                    if st.rooms.iter().any(|r| r.id == room && r.rev == id) {
+                        st.room_pending.retain(|(r, _, p, _)| !(*r == room && *p == from)); // they have the latest version
+                    }
+                    st.room_msgs.get_mut(&room).and_then(|l| l.iter_mut().find(|m| m.mine && m.id == id)).filter(|m| m.waiting.contains(&from)).map(|m| {
+                        m.waiting.retain(|p| *p != from);
+                        m.delivered = m.waiting.is_empty();
+                    })
+                };
+                if changed.is_some() {
+                    self.save_rooms();
+                    (self.0.wake)();
+                }
+            }
             Sig::FriendRequest { name } | Sig::FriendAccept { name } if !crypto::valid_name(&name) => {}
             Sig::FriendRequest { name } => {
                 let id = format!("{name}#{}", crypto::tag_for(&name, &from));
@@ -784,7 +1045,7 @@ impl Signal {
                     if list.iter().any(|m| m.id == id && !m.mine) {
                         false // a resend we already have
                     } else {
-                        list.push(ChatMsg { id, mine: false, text: text.clone(), ts, delivered: true });
+                        list.push(ChatMsg { id, mine: false, text: text.clone(), ts, delivered: true, from: String::new(), waiting: vec![] });
                         if list.len() > 500 {
                             list.remove(0);
                         }
@@ -862,6 +1123,42 @@ impl Signal {
             };
             for (p, m) in resend {
                 self.send(&p, Sig::Message { id: m.id, text: m.text, ts: m.ts });
+            }
+            // Same for group chats, to each member still waiting.
+            let resend: Vec<(Room, ChatMsg)> = {
+                let mut st = self.0.st.lock().unwrap();
+                let st = &mut *st;
+                let mut due = Vec::new();
+                for r in &st.rooms {
+                    for m in st.room_msgs.get(&r.id).into_iter().flatten().filter(|m| m.mine && !m.waiting.is_empty()).rev().take(20) {
+                        if st.msg_tries.get(&m.id).is_none_or(|t| t.elapsed() > Duration::from_secs(8)) {
+                            st.msg_tries.insert(m.id, Instant::now());
+                            due.push((r.clone(), m.clone()));
+                        }
+                    }
+                }
+                due
+            };
+            // Unconfirmed room changes (made, joined, left).
+            let changes: Vec<(String, Pub, Room)> = {
+                let mut st = self.0.st.lock().unwrap();
+                let st = &mut *st;
+                let mut due = Vec::new();
+                for (room, id, p, t) in st.room_pending.iter_mut().filter(|x| x.3.elapsed() > Duration::from_secs(8)) {
+                    *t = Instant::now();
+                    if let Some(r) = st.rooms.iter().find(|r| r.id == *room) {
+                        due.push((id.clone(), *p, r.clone()));
+                    }
+                }
+                due
+            };
+            for (id, p, r) in changes {
+                self.send_to_id(&id, &p, Sig::RoomMsg { id: r.rev, room: r, text: String::new(), ts: 0 });
+            }
+            for (r, m) in resend {
+                for p in &m.waiting {
+                    self.room_send(&r, p, Sig::RoomMsg { room: r.clone(), id: m.id, text: m.text.clone(), ts: m.ts });
+                }
             }
             if last_ping.elapsed() > Duration::from_secs(25) {
                 last_ping = Instant::now();

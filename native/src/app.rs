@@ -160,6 +160,9 @@ pub struct App {
     /// Friend whose chat window is open, and what's being typed.
     chat_with: Option<Pub>,
     chat_draft: String,
+    /// Group chat whose window is open (instead of `chat_with`), and the "new group" form (name, picked friends).
+    room_open: Option<u64>,
+    room_new: Option<(String, Vec<Pub>)>,
     /// Mini game with a friend (one at a time), and whether the game picker is open in the chat.
     game: Option<crate::minigames::Game>,
     game_pick: bool,
@@ -254,6 +257,8 @@ impl App {
             page: Page::Friends,
             status_edit: None,
             chat_with: None,
+            room_open: None,
+            room_new: None,
             game: None,
             game_pick: false,
             chat_draft: String::new(),
@@ -619,6 +624,14 @@ impl App {
                     sig.mark_read(&from);
                 } else if let Some(f) = sig.friend(&from) {
                     crate::notify::toast(&f.display(), &text);
+                }
+            }
+            Event::RoomMessage { room, from, text } => {
+                if self.room_open == Some(room) && self.window().is_some_and(|w| w.has_focus()) {
+                    sig.mark_room_read(room);
+                } else if let Some(r) = sig.room(room) {
+                    let who = sig.friends().into_iter().find(|(f, _)| f.id() == from).map(|(f, _)| f.display()).unwrap_or(from);
+                    crate::notify::toast(&format!("{who} · {}", r.name), &text);
                 }
             }
         }
@@ -1754,6 +1767,9 @@ impl App {
                             });
                         }
                         friends.sort_by_key(|(f, on)| (!on, f.display().to_lowercase()));
+                        if !friends.is_empty() {
+                            self.rooms_ui(ui, &sig, &friends);
+                        }
                         if friends.is_empty() {
                             t::card().show(ui, |ui| {
                                 ui.set_width(ui.available_width());
@@ -2409,6 +2425,7 @@ impl App {
                     }
                     if r.clicked() {
                         self.chat_with = if self.chat_with == Some(f.public) { None } else { Some(f.public) };
+                        self.room_open = None;
                     }
                     let busy = self.client.is_some() || self.outgoing.is_some();
                     if online {
@@ -3071,20 +3088,104 @@ impl App {
 }
 
 impl App {
-    /// Chat with one friend, outside any session.
+    /// Group chats on the Friends page: the list and the "new group" form.
+    fn rooms_ui(&mut self, ui: &mut egui::Ui, sig: &Signal, friends: &[(Friend, bool)]) {
+        use crate::theme::{self as t, Icon};
+        let rooms = sig.rooms();
+        ui.horizontal(|ui| {
+            t::section(ui, &tr("Group chats"));
+            if ui.small_button(tr("New group")).clicked() {
+                self.room_new = if self.room_new.is_some() { None } else { Some((String::new(), vec![])) };
+            }
+        });
+        let mut create = None;
+        if let Some((name, picked)) = &mut self.room_new {
+            t::card().show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.add(egui::TextEdit::singleline(name).hint_text(tr("Group name")).desired_width(230.0).margin(egui::vec2(10.0, 7.0)));
+                ui.horizontal_wrapped(|ui| {
+                    for (f, _) in friends {
+                        let mut on = picked.contains(&f.public);
+                        if ui.checkbox(&mut on, crate::rtl::show(&f.display())).changed() {
+                            if on {
+                                picked.push(f.public);
+                            } else {
+                                picked.retain(|p| *p != f.public);
+                            }
+                        }
+                    }
+                });
+                if t::primary(ui, &tr("Create"), Some(Icon::Plus), !picked.is_empty() && picked.len() < crate::signal::ROOM_MAX).clicked() {
+                    create = Some(sig.create_room(name, picked));
+                }
+            });
+        }
+        if create.is_some() {
+            self.room_new = None;
+            self.room_open = create;
+            self.chat_with = None;
+        }
+        if rooms.is_empty() {
+            return;
+        }
+        t::card().inner_margin(egui::Margin::symmetric(14, 6)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            for r in rooms {
+                ui.horizontal(|ui| {
+                    t::avatar(ui, &r.name, None, 36.0);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 1.0;
+                        ui.label(RichText::new(crate::rtl::show(&r.name)).font(egui::FontId::new(15.0, t::bold())));
+                        ui.label(RichText::new(trf("{} members", &[&r.members.len().to_string()])).size(12.0).color(t::MUTED()));
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let r2 = t::icon_button(ui, Icon::Chat, &tr("Open"), self.room_open == Some(r.id));
+                        let unread = sig.room_unread(r.id);
+                        if unread > 0 {
+                            let c = egui::pos2(r2.rect.max.x - 3.0, r2.rect.min.y + 3.0);
+                            ui.painter().circle_filled(c, 8.0, t::ACCENT());
+                            ui.painter().text(c, egui::Align2::CENTER_CENTER, unread.min(99).to_string(), egui::FontId::new(10.0, t::bold()), Color32::WHITE);
+                        }
+                        if r2.clicked() {
+                            self.room_open = if self.room_open == Some(r.id) { None } else { Some(r.id) };
+                            self.chat_with = None;
+                        }
+                    });
+                });
+            }
+        });
+    }
+
+    /// Chat with one friend or a group chat, outside any session.
     fn friend_chat_ui(&mut self, ctx: &egui::Context, sig: &Signal) {
         use crate::theme as t;
-        let Some(with) = self.chat_with else { return };
-        let Some(f) = sig.friend(&with) else {
+        let friends = sig.friends();
+        let room = self.room_open.and_then(|id| sig.room(id));
+        if room.is_none() {
+            self.room_open = None;
+        }
+        let f = self.chat_with.and_then(|p| sig.friend(&p)).filter(|_| room.is_none());
+        if f.is_none() {
             self.chat_with = None;
-            return;
+        }
+        let (title, online, msgs) = match (&room, &f) {
+            (Some(r), _) => {
+                sig.mark_room_read(r.id);
+                (r.name.clone(), None, sig.room_messages(r.id))
+            }
+            (None, Some(f)) => {
+                sig.mark_read(&f.public);
+                (f.display(), Some(friends.iter().any(|(x, on)| x.public == f.public && *on)), sig.messages(&f.public))
+            }
+            _ => return,
         };
-        sig.mark_read(&with);
-        let msgs = sig.messages(&with);
-        let online = sig.friends().iter().any(|(x, on)| x.public == with && *on);
+        let me = sig.id();
+        let name_of = |id: &str| friends.iter().find(|(x, _)| x.id() == id).map(|(x, _)| x.display()).unwrap_or_else(|| id.to_string());
         let mut close = false;
         let mut send = false;
         let mut invite = None;
+        let mut add = None;
+        let mut leave = false;
         egui::Window::new("friend chat")
             .id(egui::Id::new("friend_chat"))
             .title_bar(false)
@@ -3094,22 +3195,41 @@ impl App {
             .show(ctx, |ui| {
                 ui.set_width(330.0);
                 ui.horizontal(|ui| {
-                    t::avatar(ui, &f.display(), Some(online), 34.0);
+                    t::avatar(ui, &title, online, 34.0);
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.label(RichText::new(crate::rtl::show(&f.display())).font(egui::FontId::new(14.5, t::bold())));
-                        ui.label(RichText::new(if online { tr("Online") } else { tr("Offline · gets it when back online") }).size(11.5).color(if online { t::MINT_SOFT() } else { t::MUTED() }));
+                        ui.label(RichText::new(crate::rtl::show(&title)).font(egui::FontId::new(14.5, t::bold())));
+                        if let Some(r) = &room {
+                            let names: Vec<String> = r.members.iter().map(|(id, _)| if *id == me { tl("You") } else { name_of(id) }).collect();
+                            ui.label(RichText::new(trf("{} members", &[&r.members.len().to_string()])).size(11.5).color(t::MUTED())).on_hover_text(names.join("\n"));
+                        } else {
+                            let online = online == Some(true);
+                            ui.label(RichText::new(if online { tr("Online") } else { tr("Offline · gets it when back online") }).size(11.5).color(if online { t::MINT_SOFT() } else { t::MUTED() }));
+                        }
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if t::icon_button(ui, t::Icon::Close, &tr("Close"), false).clicked() {
                             close = true;
                         }
-                        if t::icon_button(ui, t::Icon::Gamepad, &tr("Play a game"), self.game_pick).clicked() {
+                        let (icon, hint) = if room.is_some() { (t::Icon::Plus, tr("Add people, leave")) } else { (t::Icon::Gamepad, tr("Play a game")) };
+                        if t::icon_button(ui, icon, &hint, self.game_pick).clicked() {
                             self.game_pick = !self.game_pick;
                         }
                     });
                 });
-                if self.game_pick {
+                if let (true, Some(r)) = (self.game_pick, &room) {
+                    ui.horizontal_wrapped(|ui| {
+                        for (x, _) in friends.iter().filter(|(x, _)| !r.has(&x.public)) {
+                            if ui.add_enabled(r.members.len() < crate::signal::ROOM_MAX, egui::Button::new(format!("+ {}", crate::rtl::show(&x.display())))).clicked() {
+                                add = Some(x.public);
+                            }
+                        }
+                        if ui.button(RichText::new(tr("Leave group")).color(t::DANGER())).clicked() {
+                            leave = true;
+                        }
+                    });
+                } else if self.game_pick {
+                    let online = online == Some(true);
                     ui.horizontal(|ui| {
                         for k in crate::minigames::Kind::ALL {
                             if ui.add_enabled(online, egui::Button::new(tr(k.name()))).on_disabled_hover_text(tr("They need to be online")).clicked() {
@@ -3137,6 +3257,9 @@ impl App {
                                     ui.set_max_width(240.0);
                                     ui.vertical(|ui| {
                                         ui.spacing_mut().item_spacing.y = 2.0;
+                                        if room.is_some() && !m.mine {
+                                            ui.label(RichText::new(crate::rtl::show(&name_of(&m.from))).size(11.0).strong().color(t::ACCENT_SOFT()));
+                                        }
                                         ui.label(RichText::new(crate::rtl::show(&m.text)).color(Color32::WHITE));
                                         let ago = duration_text(now.saturating_sub(m.ts));
                                         let meta = if !m.mine { ago } else if m.delivered { trf("{} · delivered", &[&ago]) } else { trf("{} · sent", &[&ago]) };
@@ -3165,14 +3288,27 @@ impl App {
                 }
             });
         if send && !self.chat_draft.trim().is_empty() {
-            sig.send_message(&with, &self.chat_draft);
+            match (&room, &f) {
+                (Some(r), _) => sig.send_room(r.id, &self.chat_draft),
+                (_, Some(f)) => sig.send_message(&f.public, &self.chat_draft),
+                _ => {}
+            }
             self.chat_draft.clear();
+        }
+        if let (Some(r), Some(p)) = (&room, add) {
+            sig.add_to_room(r.id, &[p]);
+        }
+        if let (Some(r), true) = (&room, leave) {
+            sig.leave_room(r.id);
+            close = true;
         }
         if close {
             self.chat_with = None;
+            self.room_open = None;
+            self.game_pick = false;
         }
-        if let Some(kind) = invite {
-            self.start_game(sig, with, kind);
+        if let (Some(kind), Some(f)) = (invite, &f) {
+            self.start_game(sig, f.public, kind);
         }
     }
 

@@ -229,6 +229,9 @@ LOCAL {local}");
         }
         std::process::exit(0);
     }
+    if args.iter().any(|a| a == "--roomtest") {
+        std::process::exit(roomtest());
+    }
     if args.iter().any(|a| a == "--signaltest") {
         std::process::exit(signaltest());
     }
@@ -683,6 +686,58 @@ fn selftest(software: bool) -> i32 {
 
 /// Two throwaway identities talk through the real public brokers: friend request, accept,
 /// presence, and a connect request/answer. Nothing is written to disk.
+/// Group chats over the real brokers: A is friends with B and C, who aren't friends with each other.
+fn roomtest() -> i32 {
+    use signal::{Friend, Signal};
+    let ids: Vec<crypto::Identity> = ["room_a", "room_b", "room_c"].iter().map(|n| crypto::Identity::new(n)).collect();
+    let dir = std::env::temp_dir().join(format!("pclone-roomtest-{}", std::process::id()));
+    let fr = |i: &crypto::Identity| Friend { name: i.name.clone(), tag: crypto::tag_for(&i.name, &i.public), public: i.public, allow_mouse: false, allow_keyboard: false, allow_gamepad: true, auto_connect: false, nickname: String::new(), group: String::new() };
+    let store = |n: usize| dir.join(n.to_string()).join("friends.json");
+    signal::write_friends(&store(0), vec![fr(&ids[1]), fr(&ids[2])]);
+    signal::write_friends(&store(1), vec![fr(&ids[0])]);
+    signal::write_friends(&store(2), vec![fr(&ids[0])]);
+    let start = |n: usize| Signal::start(ids[n].clone(), Some(store(n)), || {});
+    let (a, mut b, c) = (start(0), start(1), start(2));
+    let wait = |what: &str, secs: u64, f: &dyn Fn() -> bool| {
+        let t = Instant::now();
+        while t.elapsed() < Duration::from_secs(secs) {
+            if f() {
+                println!("ok  {what} ({:.1}s)", t.elapsed().as_secs_f32());
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        println!("FAIL {what}");
+        false
+    };
+    let ok = (|| {
+        wait("all online", 20, &|| a.online() && b.online() && c.online()) || return false;
+        let room = a.create_room("Squad", &[ids[1].public, ids[2].public]);
+        wait("B and C see the group", 20, &|| b.room(room).is_some_and(|r| r.members.len() == 3) && c.room(room).is_some())
+            || return false;
+        b.send_room(room, "hi from B");
+        wait("C (not B's friend) and A get B's message", 20, &|| [&a, &c].iter().all(|s| s.room_messages(room).iter().any(|m| m.text == "hi from B")))
+            || return false;
+        wait("B sees it delivered to both", 20, &|| b.room_messages(room).iter().any(|m| m.mine && m.delivered)) || return false;
+        c.leave_room(room);
+        wait("A and B see C left", 20, &|| [&a, &b].iter().all(|s| s.room(room).is_some_and(|r| r.members.len() == 2))) || return false;
+        b.shutdown();
+        a.send_room(room, "while you were away");
+        std::thread::sleep(Duration::from_secs(3));
+        b = start(1);
+        wait("B gets the message sent while it was offline", 40, &|| b.room_messages(room).iter().any(|m| m.text == "while you were away"))
+            || return false;
+        wait("A sees it delivered (C not waited on)", 20, &|| a.room_messages(room).iter().any(|m| m.mine && m.delivered)) || return false;
+        wait("C no longer has the group", 1, &|| c.room(room).is_none())
+    })();
+    for s in [&a, &b, &c] {
+        s.shutdown();
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    println!("{}", if ok { "PASS" } else { "FAIL" });
+    if ok { 0 } else { 1 }
+}
+
 fn signaltest() -> i32 {
     use signal::{Event, Sig, Signal};
     let a_ident = crypto::Identity::new("alpha_test");
