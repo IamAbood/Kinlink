@@ -286,7 +286,7 @@ fn single_instance(connect: Option<String>) -> bool {
 /// Test helper: profiles testA/testB as friends; B lets A connect without asking.
 fn pair_test_profiles() {
     let (a, b, c) = (crypto::Identity::new("tester_a"), crypto::Identity::new("tester_b"), crypto::Identity::new("tester_c"));
-    let fr = |me: &crypto::Identity, auto: bool| signal::Friend { name: me.name.clone(), tag: me.tag(), public: me.public, allow_mouse: true, allow_keyboard: true, allow_gamepad: true, auto_connect: auto, nickname: String::new(), group: String::new() };
+    let fr = |me: &crypto::Identity, auto: bool| signal::Friend { name: me.name.clone(), tag: me.tag(), public: me.public, allow_mouse: true, allow_keyboard: true, allow_gamepad: true, auto_connect: auto, nickname: String::new(), group: String::new(), pic: 0 };
     // B is the host; A and C are both B's friends and may connect without asking.
     for (p, me, friends) in [("testA", &a, vec![fr(&b, false)]), ("testB", &b, vec![fr(&a, true), fr(&c, true)]), ("testC", &c, vec![fr(&b, false)])] {
         unsafe { std::env::set_var("PCLONE_PROFILE", p) };
@@ -691,7 +691,7 @@ fn roomtest() -> i32 {
     use signal::{Friend, Signal};
     let ids: Vec<crypto::Identity> = ["room_a", "room_b", "room_c"].iter().map(|n| crypto::Identity::new(n)).collect();
     let dir = std::env::temp_dir().join(format!("pclone-roomtest-{}", std::process::id()));
-    let fr = |i: &crypto::Identity| Friend { name: i.name.clone(), tag: crypto::tag_for(&i.name, &i.public), public: i.public, allow_mouse: false, allow_keyboard: false, allow_gamepad: true, auto_connect: false, nickname: String::new(), group: String::new() };
+    let fr = |i: &crypto::Identity| Friend { name: i.name.clone(), tag: crypto::tag_for(&i.name, &i.public), public: i.public, allow_mouse: false, allow_keyboard: false, allow_gamepad: true, auto_connect: false, nickname: String::new(), group: String::new(), pic: 0 };
     let store = |n: usize| dir.join(n.to_string()).join("friends.json");
     signal::write_friends(&store(0), vec![fr(&ids[1]), fr(&ids[2])]);
     signal::write_friends(&store(1), vec![fr(&ids[0])]);
@@ -712,6 +712,8 @@ fn roomtest() -> i32 {
     };
     let ok = (|| {
         wait("all online", 20, &|| a.online() && b.online() && c.online()) || return false;
+        a.set_pic(7);
+        wait("B sees A's new picture", 20, &|| b.friends().iter().any(|(f, _)| f.public == ids[0].public && f.pic == 7)) || return false;
         let room = a.create_room("Squad", &[ids[1].public, ids[2].public]);
         wait("B and C see the group", 20, &|| b.room(room).is_some_and(|r| r.members.len() == 3) && c.room(room).is_some())
             || return false;

@@ -32,6 +32,9 @@ pub struct Friend {
     /// Optional group, e.g. "Home PCs".
     #[serde(default)]
     pub group: String,
+    /// Their profile picture (theme::PICS index + 1, 0 = first letter), as they last told us.
+    #[serde(default)]
+    pub pic: u8,
 }
 
 fn yes() -> bool {
@@ -76,6 +79,8 @@ pub enum Sig {
     /// Group chat: the room as the sender knows it, plus a message (empty text = only a room update).
     RoomMsg { room: Room, id: u64, text: String, ts: u64 },
     RoomAck { room: u64, id: u64 },
+    /// My profile picture (theme::PICS index + 1, 0 = first letter).
+    Avatar { pic: u8 },
 }
 
 /// A group chat. No server: everyone in it messages everyone else directly.
@@ -238,6 +243,7 @@ struct Inner {
     wake: Box<dyn Fn() + Send + Sync>,
     stop: AtomicBool,
     my_status: Mutex<String>,
+    my_pic: Mutex<u8>,
 }
 
 #[derive(Clone)]
@@ -324,6 +330,7 @@ impl Signal {
             wake: Box::new(wake),
             stop: AtomicBool::new(false),
             my_status: Mutex::new(String::new()),
+            my_pic: Mutex::new(0),
         }));
         for i in 0..BROKERS.len() {
             let s2 = s.clone();
@@ -354,6 +361,15 @@ impl Signal {
     /// Asks a friend to connect to this PC and help.
     pub fn ask_help(&self, to: &Pub) {
         self.send(to, Sig::HelpRequest);
+    }
+
+    /// Sets my profile picture (theme::PICS, 0 = letter) and tells every friend.
+    pub fn set_pic(&self, pic: u8) {
+        *self.0.my_pic.lock().unwrap() = pic;
+        let pubs: Vec<Pub> = self.0.st.lock().unwrap().friends.iter().map(|f| f.public).collect();
+        for p in pubs {
+            self.send(&p, Sig::Avatar { pic });
+        }
     }
 
     pub fn set_status(&self, text: &str) {
@@ -730,7 +746,7 @@ impl Signal {
             let Some(i) = st.incoming.iter().position(|(_, p)| *p == public) else { return };
             let (id, p) = st.incoming.remove(i);
             let (name, tag) = crypto::parse_id(&id).unwrap();
-            st.friends.push(Friend { name, tag, public: p, allow_mouse: false, allow_keyboard: false, allow_gamepad: true, auto_connect: false, nickname: String::new(), group: String::new() });
+            st.friends.push(Friend { name, tag, public: p, allow_mouse: false, allow_keyboard: false, allow_gamepad: true, auto_connect: false, nickname: String::new(), group: String::new(), pic: 0 });
             st.last_seen.insert(p, Instant::now());
             id
         };
@@ -979,7 +995,7 @@ impl Signal {
                     st.outgoing.retain(|o| !(o.public == Some(from) || o.id.eq_ignore_ascii_case(&id)));
                     if st.outgoing.len() < before && !st.friends.iter().any(|f| f.public == from) {
                         let tag = crypto::tag_for(&name, &from);
-                        st.friends.push(Friend { name, tag, public: from, allow_mouse: false, allow_keyboard: false, allow_gamepad: true, auto_connect: false, nickname: String::new(), group: String::new() });
+                        st.friends.push(Friend { name, tag, public: from, allow_mouse: false, allow_keyboard: false, allow_gamepad: true, auto_connect: false, nickname: String::new(), group: String::new(), pic: 0 });
                         st.last_seen.insert(from, Instant::now());
                         true
                     } else {
@@ -1024,6 +1040,10 @@ impl Signal {
                 if reply || !was_online {
                     let text = self.0.my_status.lock().unwrap().clone();
                     self.send(&from, Sig::Status { text });
+                    let pic = *self.0.my_pic.lock().unwrap();
+                    if pic != 0 {
+                        self.send(&from, Sig::Avatar { pic });
+                    }
                 }
                 if !was_online {
                     self.event(Event::FriendOnline(from));
@@ -1075,6 +1095,13 @@ impl Signal {
                 };
                 if changed {
                     self.save_messages();
+                    (self.0.wake)();
+                }
+            }
+            Sig::Avatar { pic } => {
+                let changed = self.0.st.lock().unwrap().friends.iter_mut().find(|f| f.public == from && f.pic != pic).map(|f| f.pic = pic).is_some();
+                if changed {
+                    self.save();
                     (self.0.wake)();
                 }
             }

@@ -26,6 +26,8 @@ pub struct Settings {
     pub language: String,
     /// My status line shown to friends.
     pub status: String,
+    /// My profile picture (theme::PICS index + 1, 0 = first letter).
+    pub pic: u8,
     /// Ask before accepting incoming files.
     pub ask_files: bool,
     /// Controller remap: entry i = which button (bit index) physical button i acts as.
@@ -45,7 +47,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { hosting: true, port: crate::proto::DEFAULT_PORT, max_mbps: 30, fps: 60, hardware: true, upnp: true, autostart_init: false, fullscreen_connect: true, hint_seen: false, notify_online: true, language: String::new(), status: String::new(), ask_files: true, pad_map: Vec::new(), show_stats: false, hotkey_mods: 7, record_sessions: false, light_theme: false, muted_apps: vec!["Discord.exe".into()] }
+        Self { hosting: true, port: crate::proto::DEFAULT_PORT, max_mbps: 30, fps: 60, hardware: true, upnp: true, autostart_init: false, fullscreen_connect: true, hint_seen: false, notify_online: true, language: String::new(), status: String::new(), pic: 0, ask_files: true, pad_map: Vec::new(), show_stats: false, hotkey_mods: 7, record_sessions: false, light_theme: false, muted_apps: vec!["Discord.exe".into()] }
     }
 }
 

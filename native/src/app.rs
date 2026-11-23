@@ -163,6 +163,8 @@ pub struct App {
     /// Group chat whose window is open (instead of `chat_with`), and the "new group" form (name, picked friends).
     room_open: Option<u64>,
     room_new: Option<(String, Vec<Pub>)>,
+    /// The profile picture picker is open.
+    pic_pick: bool,
     /// Mini game with a friend (one at a time), and whether the game picker is open in the chat.
     game: Option<crate::minigames::Game>,
     game_pick: bool,
@@ -259,6 +261,7 @@ impl App {
             chat_with: None,
             room_open: None,
             room_new: None,
+            pic_pick: std::env::var_os("PCLONE_PICS").is_some(), // screenshot tests
             game: None,
             game_pick: false,
             chat_draft: String::new(),
@@ -340,6 +343,7 @@ impl App {
         let store = settings::data_dir().map(|d| d.join("friends.json"));
         let sig = Signal::start(id, store, self.waker());
         sig.set_status(&self.s.status);
+        sig.set_pic(self.s.pic);
         self.signal = Some(sig);
         crate::files::ASK.store(self.s.ask_files, std::sync::atomic::Ordering::Relaxed);
         set_pad_map(&self.s.pad_map);
@@ -474,6 +478,7 @@ impl App {
                 let store = settings::data_dir().map(|d| d.join("friends.json"));
                 let sig = Signal::start(new, store, self.waker());
                 sig.set_status(&self.s.status);
+                sig.set_pic(self.s.pic);
                 self.signal = Some(sig);
                 self.rename_err = None;
                 self.rename_text.clear();
@@ -982,7 +987,7 @@ impl App {
                 .show(ctx, |ui| {
                     ui.set_width(300.0);
                     ui.horizontal(|ui| {
-                        t::avatar(ui, &f.as_ref().map(|f| f.display()).unwrap_or_else(|| p.name.clone()), None, 38.0);
+                        t::avatar_pic(ui, &f.as_ref().map(|f| f.display()).unwrap_or_else(|| p.name.clone()), f.as_ref().map_or(0, |f| f.pic), None, 38.0);
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 1.0;
                             ui.label(RichText::new(&p.name).font(egui::FontId::new(14.0, t::bold())));
@@ -1019,7 +1024,7 @@ impl App {
                 .show(ctx, |ui| {
                     ui.set_width(280.0);
                     ui.horizontal(|ui| {
-                        t::avatar(ui, &f.display(), None, 38.0);
+                        t::friend_avatar(ui, &f, None, 38.0);
                         ui.vertical(|ui| {
                             ui.label(RichText::new(f.display()).font(egui::FontId::new(14.0, t::bold())));
                             ui.label(RichText::new(tr("is asking for your help")).size(12.0).color(t::MUTED()));
@@ -1595,10 +1600,38 @@ impl App {
                         ui.horizontal(|ui| {
                             let id = sig.id();
                             let (name, tag) = id.split_once('#').unwrap_or((&id, ""));
+                            if t::avatar_pic(ui, name, self.s.pic, None, 30.0).on_hover_text(tr("Change your picture")).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                                self.pic_pick = !self.pic_pick;
+                            }
+                            ui.add_space(6.0);
                             ui.spacing_mut().item_spacing.x = 0.0;
                             ui.label(RichText::new(name).font(egui::FontId::new(14.0, t::bold())));
                             ui.label(RichText::new(format!("#{tag}")).font(egui::FontId::new(14.0, t::bold())).color(t::ACCENT_SOFT()));
                         });
+                        if self.pic_pick {
+                            // Pick a picture (0 = first letter); friends see it too.
+                            let mut chosen = None;
+                            let id = sig.id();
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                                for pic in 0..=t::PICS.len() as u8 {
+                                    let hint = if pic == 0 { tl("First letter") } else { tl(t::PICS[pic as usize - 1]) };
+                                    let r = t::avatar_pic(ui, &id, pic, None, 34.0).on_hover_text(hint).on_hover_cursor(egui::CursorIcon::PointingHand);
+                                    if pic == self.s.pic {
+                                        ui.painter().rect_stroke(r.rect.expand(1.5), 10.0, egui::Stroke::new(2.0, t::ACCENT()), egui::StrokeKind::Outside);
+                                    }
+                                    if r.clicked() {
+                                        chosen = Some(pic);
+                                    }
+                                }
+                            });
+                            if let Some(pic) = chosen {
+                                self.s.pic = pic;
+                                self.s.save();
+                                sig.set_pic(pic);
+                                self.pic_pick = false;
+                            }
+                        }
                         // My status, shown to friends.
                         let presets = ["", "Busy", "Away", "In a game"];
                         let shown = if self.s.status.is_empty() { tr("Available") } else { crate::rtl::show(&crate::i18n::tl(&self.s.status)) };
@@ -2398,7 +2431,7 @@ impl App {
         for (k, (f, online)) in friends.into_iter().enumerate() {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                t::avatar(ui, &f.display(), Some(online), 42.0);
+                t::friend_avatar(ui, &f, Some(online), 42.0);
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 1.0;
                     ui.horizontal(|ui| {
@@ -3195,7 +3228,7 @@ impl App {
             .show(ctx, |ui| {
                 ui.set_width(330.0);
                 ui.horizontal(|ui| {
-                    t::avatar(ui, &title, online, 34.0);
+                    t::avatar_pic(ui, &title, f.as_ref().map_or(0, |f| f.pic), online, 34.0);
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
                         ui.label(RichText::new(crate::rtl::show(&title)).font(egui::FontId::new(14.5, t::bold())));

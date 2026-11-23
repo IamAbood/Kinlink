@@ -622,7 +622,7 @@ or have permission to use."), 11.5, t::MUTED());
                     t::card().show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
-                            t::avatar(ui, &f.display(), Some(online), 42.0);
+                            t::friend_avatar(ui, &f, Some(online), 42.0);
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 1.0;
                                 ui.label(RichText::new(crate::rtl::show(&f.display())).font(egui::FontId::new(15.0, t::bold())));

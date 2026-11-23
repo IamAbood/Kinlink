@@ -369,23 +369,121 @@ pub fn icon_button(ui: &mut Ui, i: Icon, hint: &str, on: bool) -> Response {
     resp.on_hover_text(hint)
 }
 
+/// Profile pictures people can pick (index + 1 = `pic`; 0 = first letter).
+pub const PICS: [&str; 10] = ["Man", "Woman", "Man (dark skin)", "Woman (dark skin)", "Old man", "Old woman", "Cat", "Dog", "Snake", "Cow"];
+
 /// Rounded-square avatar with the first letter and an online dot.
 pub fn avatar(ui: &mut Ui, name: &str, online: Option<bool>, size: f32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    avatar_pic(ui, name, 0, online, size);
+}
+
+/// A friend's avatar: their picture if they picked one.
+pub fn friend_avatar(ui: &mut Ui, f: &crate::signal::Friend, online: Option<bool>, size: f32) {
+    avatar_pic(ui, &f.display(), f.pic, online, size);
+}
+
+/// Draws one of PICS (faceless, simple shapes) into `rect`.
+pub fn draw_pic(p: &Painter, rect: Rect, pic: u8, dim: bool) {
+    use egui::Shape;
+    let s = rect.width();
+    let at = |x: f32, y: f32| pos2(rect.min.x + x * s, rect.min.y + y * s);
+    let rgb = |c: u32| {
+        let c = Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8);
+        if dim { c.gamma_multiply(0.45) } else { c }
+    };
+    let bg = [0x3B4A8C, 0x7A3E6B, 0x2F6B5A, 0x8C5A2B, 0x4A5568, 0x6B4E8C, 0x8C6A2E, 0x2E6B8C, 0x3E7A3E, 0x5A7A8C][(pic as usize - 1) % 10];
+    let p = p.with_clip_rect(rect.intersect(p.clip_rect()));
+    p.rect_filled(rect, s * 0.28, rgb(bg));
+    let circle = |x: f32, y: f32, r: f32, c: u32| p.circle_filled(at(x, y), r * s, rgb(c));
+    let ellipse = |x: f32, y: f32, rx: f32, ry: f32, c: u32| p.add(Shape::ellipse_filled(at(x, y), vec2(rx * s, ry * s), rgb(c)));
+    let tri = |a: (f32, f32), b: (f32, f32), c: (f32, f32), col: u32| p.add(Shape::convex_polygon(vec![at(a.0, a.1), at(b.0, b.1), at(c.0, c.1)], rgb(col), Stroke::NONE));
+    // A person: shoulders, then hair behind/over a plain head (no face).
+    let person = |skin: u32, hair: u32, shirt: u32, style: u8| {
+        ellipse(0.5, 1.02, 0.36, 0.3, shirt);
+        match style {
+            1 => {
+                p.rect_filled(Rect::from_min_max(at(0.27, 0.3), at(0.73, 0.74)), s * 0.12, rgb(hair)); // long hair
+            }
+            3 => {
+                circle(0.5, 0.16, 0.1, hair); // bun
+            }
+            _ => {}
+        }
+        if style == 2 {
+            circle(0.32, 0.45, 0.07, hair); // bald on top, grey at the sides
+            circle(0.68, 0.45, 0.07, hair);
+        } else {
+            circle(0.5, 0.4, 0.2, hair);
+        }
+        circle(0.5, if style == 2 { 0.42 } else { 0.45 }, 0.18, skin);
+    };
+    let (light, dark, grey) = (0xF2C9A0, 0x8A5A3B, 0xD8D8D8);
+    match pic {
+        1 => person(light, 0x5A3A22, 0x4C7BD9, 0),
+        2 => person(light, 0xC8913A, 0xD9578A, 1),
+        3 => person(dark, 0x1E1A18, 0x3FA37A, 0),
+        4 => person(dark, 0x1E1A18, 0xE09A3A, 1),
+        5 => person(light, grey, 0xB07A4A, 2),
+        6 => person(light, grey, 0x9A6BC9, 3),
+        7 => {
+            // cat: ears + round head
+            tri((0.24, 0.42), (0.3, 0.14), (0.46, 0.3), 0xE8A15A);
+            tri((0.76, 0.42), (0.7, 0.14), (0.54, 0.3), 0xE8A15A);
+            circle(0.5, 0.55, 0.3, 0xE8A15A);
+            tri((0.3, 0.34), (0.32, 0.22), (0.4, 0.3), 0xF6C9A0);
+            tri((0.7, 0.34), (0.68, 0.22), (0.6, 0.3), 0xF6C9A0);
+        }
+        8 => {
+            // dog: floppy ears + snout
+            circle(0.5, 0.5, 0.28, 0xC48A52);
+            ellipse(0.22, 0.5, 0.1, 0.2, 0x7A4E2A);
+            ellipse(0.78, 0.5, 0.1, 0.2, 0x7A4E2A);
+            ellipse(0.5, 0.66, 0.15, 0.11, 0xEBC9A0);
+        }
+        9 => {
+            // snake: thick S curve + head
+            let pts = [at(0.2, 0.82), at(0.95, 0.75), at(0.05, 0.4), at(0.62, 0.28)];
+            p.add(egui::epaint::CubicBezierShape::from_points_stroke(pts, false, Color32::TRANSPARENT, Stroke::new(s * 0.13, rgb(0x6CC24A))));
+            ellipse(0.68, 0.26, 0.11, 0.08, 0x6CC24A);
+            p.line_segment([at(0.78, 0.27), at(0.86, 0.29)], Stroke::new(s * 0.025, rgb(0xE0453A)));
+        }
+        _ => {
+            // cow: horns, white head with spots, pink muzzle
+            tri((0.26, 0.3), (0.16, 0.12), (0.36, 0.24), 0xE8DCC0);
+            tri((0.74, 0.3), (0.84, 0.12), (0.64, 0.24), 0xE8DCC0);
+            ellipse(0.5, 0.5, 0.27, 0.3, 0xF4F4F4);
+            ellipse(0.62, 0.27, 0.12, 0.07, 0x2A2A2A); // patches off to the side, so they don't read as eyes
+            circle(0.27, 0.56, 0.06, 0x2A2A2A);
+            ellipse(0.5, 0.72, 0.2, 0.12, 0xF0A0B0);
+        }
+    }
+}
+
+/// Avatar: picture `pic` (see PICS) or, for 0, the first letter. Plus an online dot.
+pub fn avatar_pic(ui: &mut Ui, name: &str, pic: u8, online: Option<bool>, size: f32) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    if (1..=PICS.len() as u8).contains(&pic) {
+        draw_pic(ui.painter(), rect, pic, online == Some(false));
+    } else {
+        letter_avatar(ui.painter(), rect, name, online);
+    }
+    if online == Some(true) {
+        let c = pos2(rect.max.x - 2.0, rect.max.y - 2.0);
+        ui.painter().circle_filled(c, 6.5, CARD());
+        ui.painter().circle_filled(c, 4.5, MINT());
+    }
+    resp
+}
+
+fn letter_avatar(p: &Painter, rect: Rect, name: &str, online: Option<bool>) {
+    let size = rect.width();
     let hues = [(0x2B, 0x24, 0x70, 0xC9, 0xC2, 0xFF), (0x17, 0x3A, 0x33, 0x9D, 0xE8, 0xC4), (0x3A, 0x26, 0x14, 0xFF, 0xC9, 0x8A), (0x14, 0x2E, 0x3A, 0x8A, 0xD8, 0xFF)];
     let h = name.bytes().fold(0usize, |a, b| a.wrapping_mul(31).wrapping_add(b as usize)) % hues.len();
     let (br, bg, bb, fr, fg, fb) = hues[h];
-    let online_known = online.is_some();
     let (bgc, fgc) = if online == Some(false) { (Color32::from_rgb(0x1C, 0x24, 0x40), MUTED()) } else { (Color32::from_rgb(br, bg, bb), Color32::from_rgb(fr, fg, fb)) };
-    let p = ui.painter();
     p.rect_filled(rect, size * 0.28, bgc);
     let letter = name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "?".into());
     p.text(rect.center(), egui::Align2::CENTER_CENTER, letter, FontId::new(size * 0.42, bold()), fgc);
-    if online_known && online == Some(true) {
-        let c = pos2(rect.max.x - 2.0, rect.max.y - 2.0);
-        p.circle_filled(c, 6.5, CARD());
-        p.circle_filled(c, 4.5, MINT());
-    }
 }
 
 /// iOS-style switch with a label; returns true when flipped.
