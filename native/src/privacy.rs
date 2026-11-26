@@ -1,4 +1,4 @@
-//! "Hide my screen": while guests are connected, black covers sit on every host monitor.
+//! Privacy mode: while a guest with it is connected, black covers sit on every host monitor.
 //! They're excluded from capture (guests still see the desktop) and click-through (guest input
 //! reaches the apps below). Needs Windows 10 2004+ for WDA_EXCLUDEFROMCAPTURE.
 use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
@@ -9,25 +9,18 @@ use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-static ENABLED: AtomicBool = AtomicBool::new(false);
-static GUESTS: AtomicBool = AtomicBool::new(false);
+static WANT: AtomicBool = AtomicBool::new(false);
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
-/// The user's switch.
-pub fn set_enabled(on: bool) {
-    ENABLED.store(on, SeqCst);
-    update();
-}
-
-/// Called by the host: are guests connected right now?
-pub fn set_guests(on: bool) {
-    if GUESTS.swap(on, SeqCst) != on {
+/// Called by the host: is a guest with privacy mode connected right now?
+pub fn set(on: bool) {
+    if WANT.swap(on, SeqCst) != on {
         update();
     }
 }
 
 fn wanted() -> bool {
-    ENABLED.load(SeqCst) && GUESTS.load(SeqCst)
+    WANT.load(SeqCst)
 }
 
 fn update() {
@@ -93,8 +86,7 @@ pub fn cover_thread() {
 
 /// Test: with the cover up, the captured screen must not be all black.
 pub fn selftest() -> i32 {
-    set_enabled(true);
-    set_guests(true);
+    set(true);
     std::thread::sleep(Duration::from_millis(800));
     let up = RUNNING.load(SeqCst); // false = no cover could be made
     let m = crate::capture::monitors().into_iter().next().expect("monitor");
@@ -103,7 +95,7 @@ pub fn selftest() -> i32 {
     for _ in 0..20 {
         let _ = c.next_frame(100, &mut buf);
     }
-    set_guests(false);
+    set(false);
     let lit = buf.chunks(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 30).count();
     let pct = lit * 100 / (buf.len() / 4).max(1);
     println!("cover up {up}, guests see {pct}% non-black");

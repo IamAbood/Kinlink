@@ -43,13 +43,11 @@ pub struct Settings {
     pub light_theme: bool,
     /// Apps whose sound guests don't hear (exe names). Discord by default: your call stays private.
     pub muted_apps: Vec<String>,
-    /// Black out this PC's monitors while guests are connected (guests still see everything).
-    pub hide_screen: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { hosting: true, port: crate::proto::DEFAULT_PORT, max_mbps: 30, fps: 60, hardware: true, upnp: true, autostart_init: false, fullscreen_connect: true, hint_seen: false, notify_online: true, language: String::new(), status: String::new(), pic: 0, ask_files: true, pad_map: Vec::new(), show_stats: false, hotkey_mods: 7, record_sessions: false, light_theme: false, muted_apps: vec!["Discord.exe".into()], hide_screen: false }
+        Self { hosting: true, port: crate::proto::DEFAULT_PORT, max_mbps: 30, fps: 60, hardware: true, upnp: true, autostart_init: false, fullscreen_connect: true, hint_seen: false, notify_online: true, language: String::new(), status: String::new(), pic: 0, ask_files: true, pad_map: Vec::new(), show_stats: false, hotkey_mods: 7, record_sessions: false, light_theme: false, muted_apps: vec!["Discord.exe".into()] }
     }
 }
 

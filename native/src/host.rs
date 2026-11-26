@@ -36,11 +36,13 @@ pub struct HostConfig {
     pub muted_apps: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Perms {
     pub mouse: bool,
     pub keyboard: bool,
     pub gamepad: bool,
+    /// Black out this PC's monitors while this guest is connected.
+    pub hide_screen: bool,
 }
 
 /// A connected controller as shown in the host UI (player order).
@@ -665,7 +667,7 @@ fn on_packet(sh: &Arc<Shared>, idx: usize, from: SocketAddr, pkt: &[u8]) {
             sh.keyframe.store(true, SeqCst); // the new guest needs a full picture
             sh.refresh_clients(None);
         }
-        let perms = sh.sessions.lock().unwrap().iter().find(|s| s.id == sid).map(|s| s.perms).unwrap_or(Perms { mouse: false, keyboard: false, gamepad: false });
+        let perms = sh.sessions.lock().unwrap().iter().find(|s| s.id == sid).map(|s| s.perms).unwrap_or_default();
         let names = monitors().into_iter().map(|m| m.name).collect();
         return reply(&Msg::Welcome {
             monitors: names,
@@ -870,7 +872,7 @@ fn video_loop(sh: Arc<Shared>) {
             secure = false;
             if awake {
                 awake = false;
-                crate::privacy::set_guests(false);
+                crate::privacy::set(false);
                 unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
             }
             thread::sleep(Duration::from_millis(50));
@@ -880,9 +882,9 @@ fn video_loop(sh: Arc<Shared>) {
             // Keep the screen on while guests watch: otherwise the lock screen turns the display
             // off after a minute and guests only see black.
             awake = true;
-            crate::privacy::set_guests(true);
             unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED) };
         }
+        crate::privacy::set(sh.sessions.lock().unwrap().iter().any(|s| s.perms.hide_screen));
         // Keep a helper link while guests are connected; ask it whether the secure desktop is up.
         if sh.helper.lock().unwrap().is_none() && last_connect.elapsed() > Duration::from_secs(3) {
             last_connect = Instant::now();
@@ -1185,7 +1187,7 @@ fn video_loop(sh: Arc<Shared>) {
             (n_frames, n_bytes, enc_time, tick) = (0, 0, Duration::ZERO, Instant::now());
         }
     }
-    crate::privacy::set_guests(false);
+    crate::privacy::set(false);
 }
 
 // ---------------------------------------------------------------- audio / clipboard / upnp

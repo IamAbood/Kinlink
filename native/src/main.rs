@@ -196,7 +196,7 @@ fn main() {
         let cfg = host::HostConfig { name: "host".into(), port: 47895, max_mbps: 20, fps: 30, hardware: true, upnp: false, record: false, muted_apps: Vec::new() };
         let h = host::Host::start(cfg).unwrap();
         let (ce, he) = (crypto::Ephemeral::new(), crypto::Ephemeral::new());
-        h.handle().prepare(he.cipher(&ce.public, 79, false), host::Perms { mouse: true, keyboard: true, gamepad: false }, "g#0001".into());
+        h.handle().prepare(he.cipher(&ce.public, 79, false), host::Perms { mouse: true, keyboard: true, gamepad: false, hide_screen: false }, "g#0001".into());
         let sock = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
         let c = client::Client::start(sock, vec!["127.0.0.1:47895".parse().unwrap()], ce.cipher(&he.public, 79, true), "host".into(), || {});
         std::thread::sleep(Duration::from_secs(3));
@@ -222,7 +222,7 @@ fn main() {
         // View-only host + a browser link; prints who's connected for 3 minutes.
         let cfg = host::HostConfig { name: "host".into(), port: 47896, max_mbps: 8, fps: 30, hardware: true, upnp: false, record: std::env::var_os("PCLONE_RECORD").is_some(), muted_apps: std::env::var("PCLONE_MUTE").map(|m| vec![m]).unwrap_or_default() };
         let h = host::Host::start(cfg).unwrap();
-        let link = h.handle().web_link(host::Perms { mouse: false, keyboard: false, gamepad: false }, std::env::var_os("PCLONE_PARTY").is_some());
+        let link = h.handle().web_link(host::Perms { mouse: false, keyboard: false, gamepad: false, hide_screen: false }, std::env::var_os("PCLONE_PARTY").is_some());
         let local = link.replacen(crate::web::PAGE, "http://localhost:8765/", 1);
         println!("LINK {link}
 LOCAL {local}");
@@ -290,7 +290,7 @@ fn single_instance(connect: Option<String>) -> bool {
 /// Test helper: profiles testA/testB as friends; B lets A connect without asking.
 fn pair_test_profiles() {
     let (a, b, c) = (crypto::Identity::new("tester_a"), crypto::Identity::new("tester_b"), crypto::Identity::new("tester_c"));
-    let fr = |me: &crypto::Identity, auto: bool| signal::Friend { name: me.name.clone(), tag: me.tag(), public: me.public, allow_mouse: true, allow_keyboard: true, allow_gamepad: true, auto_connect: auto, nickname: String::new(), group: String::new(), pic: 0 };
+    let fr = |me: &crypto::Identity, auto: bool| signal::Friend { name: me.name.clone(), tag: me.tag(), public: me.public, allow_mouse: true, allow_keyboard: true, allow_gamepad: true, auto_connect: auto, nickname: String::new(), group: String::new(), pic: 0, hide_screen: false };
     // B is the host; A and C are both B's friends and may connect without asking.
     for (p, me, friends) in [("testA", &a, vec![fr(&b, false)]), ("testB", &b, vec![fr(&a, true), fr(&c, true)]), ("testC", &c, vec![fr(&b, false)])] {
         unsafe { std::env::set_var("PCLONE_PROFILE", p) };
@@ -336,7 +336,7 @@ fn helpertest() -> i32 {
         let cfg = host::HostConfig { name: "host".into(), port: 47897, max_mbps: 20, fps: 30, hardware: true, upnp: false, record: false, muted_apps: Vec::new() };
         let h = host::Host::start(cfg).unwrap();
         let (ce, he) = (crypto::Ephemeral::new(), crypto::Ephemeral::new());
-        h.handle().prepare(he.cipher(&ce.public, 78, false), host::Perms { mouse: false, keyboard: false, gamepad: false }, "g#0001".into());
+        h.handle().prepare(he.cipher(&ce.public, 78, false), host::Perms { mouse: false, keyboard: false, gamepad: false, hide_screen: false }, "g#0001".into());
         let sock = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
         let c = client::Client::start(sock, vec!["127.0.0.1:47897".parse().unwrap()], ce.cipher(&he.public, 78, true), "host".into(), || {});
         let (mut frames, t) = (0, Instant::now());
@@ -359,7 +359,7 @@ fn helpertest() -> i32 {
         let cfg = host::HostConfig { name: "host".into(), port: 47898, max_mbps: 20, fps: 30, hardware: true, upnp: false, record: false, muted_apps: Vec::new() };
         let h = host::Host::start(cfg).unwrap();
         let (ce, he) = (crypto::Ephemeral::new(), crypto::Ephemeral::new());
-        h.handle().prepare(he.cipher(&ce.public, 77, false), host::Perms { mouse: true, keyboard: true, gamepad: false }, "g#0001".into());
+        h.handle().prepare(he.cipher(&ce.public, 77, false), host::Perms { mouse: true, keyboard: true, gamepad: false, hide_screen: false }, "g#0001".into());
         let sock = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
         let c = client::Client::start(sock, vec!["127.0.0.1:47898".parse().unwrap()], ce.cipher(&he.public, 77, true), "host".into(), || {});
         std::thread::sleep(Duration::from_secs(3));
@@ -573,8 +573,8 @@ fn selftest(software: bool) -> i32 {
     let host_file: Vec<u8> = (0..1_000_000u32).map(|i| (i * 31 + 7) as u8).collect();
     std::fs::write(tmp.join("from_guest.bin"), &guest_file).unwrap();
     std::fs::write(tmp.join("from_host.bin"), &host_file).unwrap();
-    let g1 = join(1001, "guest1#0001", host::Perms { mouse: true, keyboard: false, gamepad: true });
-    let g2 = join(2002, "guest2#0002", host::Perms { mouse: false, keyboard: true, gamepad: true });
+    let g1 = join(1001, "guest1#0001", host::Perms { mouse: true, keyboard: false, gamepad: true, hide_screen: false });
+    let g2 = join(2002, "guest2#0002", host::Perms { mouse: false, keyboard: true, gamepad: true, hide_screen: false });
     let start = Instant::now();
     let (mut f1, mut f2, mut f2_after_kick) = (0, 0, 0);
     let (mut sent, mut kicked, mut last2) = (false, false, (0, 0));
@@ -695,7 +695,7 @@ fn roomtest() -> i32 {
     use signal::{Friend, Signal};
     let ids: Vec<crypto::Identity> = ["room_a", "room_b", "room_c"].iter().map(|n| crypto::Identity::new(n)).collect();
     let dir = std::env::temp_dir().join(format!("pclone-roomtest-{}", std::process::id()));
-    let fr = |i: &crypto::Identity| Friend { name: i.name.clone(), tag: crypto::tag_for(&i.name, &i.public), public: i.public, allow_mouse: false, allow_keyboard: false, allow_gamepad: true, auto_connect: false, nickname: String::new(), group: String::new(), pic: 0 };
+    let fr = |i: &crypto::Identity| Friend { name: i.name.clone(), tag: crypto::tag_for(&i.name, &i.public), public: i.public, allow_mouse: false, allow_keyboard: false, allow_gamepad: true, auto_connect: false, nickname: String::new(), group: String::new(), pic: 0, hide_screen: false };
     let store = |n: usize| dir.join(n.to_string()).join("friends.json");
     signal::write_friends(&store(0), vec![fr(&ids[1]), fr(&ids[2])]);
     signal::write_friends(&store(1), vec![fr(&ids[0])]);

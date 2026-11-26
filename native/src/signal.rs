@@ -35,6 +35,9 @@ pub struct Friend {
     /// Their profile picture (theme::PICS index + 1, 0 = first letter), as they last told us.
     #[serde(default)]
     pub pic: u8,
+    /// Privacy mode: my monitors go black while they're connected to this PC.
+    #[serde(default)]
+    pub hide_screen: bool,
 }
 
 fn yes() -> bool {
@@ -746,7 +749,7 @@ impl Signal {
             let Some(i) = st.incoming.iter().position(|(_, p)| *p == public) else { return };
             let (id, p) = st.incoming.remove(i);
             let (name, tag) = crypto::parse_id(&id).unwrap();
-            st.friends.push(Friend { name, tag, public: p, allow_mouse: false, allow_keyboard: false, allow_gamepad: true, auto_connect: false, nickname: String::new(), group: String::new(), pic: 0 });
+            st.friends.push(Friend { name, tag, public: p, allow_mouse: false, allow_keyboard: false, allow_gamepad: true, auto_connect: false, nickname: String::new(), group: String::new(), pic: 0, hide_screen: false });
             st.last_seen.insert(p, Instant::now());
             id
         };
@@ -995,7 +998,7 @@ impl Signal {
                     st.outgoing.retain(|o| !(o.public == Some(from) || o.id.eq_ignore_ascii_case(&id)));
                     if st.outgoing.len() < before && !st.friends.iter().any(|f| f.public == from) {
                         let tag = crypto::tag_for(&name, &from);
-                        st.friends.push(Friend { name, tag, public: from, allow_mouse: false, allow_keyboard: false, allow_gamepad: true, auto_connect: false, nickname: String::new(), group: String::new(), pic: 0 });
+                        st.friends.push(Friend { name, tag, public: from, allow_mouse: false, allow_keyboard: false, allow_gamepad: true, auto_connect: false, nickname: String::new(), group: String::new(), pic: 0, hide_screen: false });
                         st.last_seen.insert(from, Instant::now());
                         true
                     } else {

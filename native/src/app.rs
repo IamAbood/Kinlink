@@ -234,7 +234,7 @@ pub struct App {
 impl App {
     pub fn new(proxy: EventLoopProxy<()>, start_minimized: bool, connect_on_start: Option<String>) -> Self {
         Self {
-            s: { let s = Settings::load(); crate::privacy::set_enabled(s.hide_screen); s },
+            s: Settings::load(),
             proxy: Arc::new(Mutex::new(proxy)),
             gfx: None,
             egui_ctx: egui::Context::default(),
@@ -268,7 +268,7 @@ impl App {
             pending_join: None,
             clip_batches: Default::default(),
             join_text: String::new(),
-            invite_perms: Perms { mouse: false, keyboard: false, gamepad: true },
+            invite_perms: Perms { mouse: false, keyboard: false, gamepad: true, hide_screen: false },
             last_invite: None,
             history: load_history(),
             live_sessions: Default::default(),
@@ -498,7 +498,7 @@ impl App {
         let (Some(sig), Some(host)) = (self.signal.clone(), self.host.as_ref().map(|h| h.handle())) else { return };
         let perms = match (r.guest, sig.friend(&r.from)) {
             (Some(p), _) => p,
-            (None, Some(f)) => Perms { mouse: f.allow_mouse, keyboard: f.allow_keyboard, gamepad: f.allow_gamepad },
+            (None, Some(f)) => Perms { mouse: f.allow_mouse, keyboard: f.allow_keyboard, gamepad: f.allow_gamepad, hide_screen: f.hide_screen },
             (None, None) => return,
         };
         std::thread::spawn(move || {
@@ -530,7 +530,7 @@ impl App {
                 } else if helping {
                     // We asked them for help: let them in with full control.
                     self.help_asked.retain(|(p, _)| *p != from);
-                    r.guest = Some(Perms { mouse: true, keyboard: true, gamepad: true });
+                    r.guest = Some(Perms { mouse: true, keyboard: true, gamepad: true, hide_screen: false });
                     self.toast(tlf("{} is connecting to help you", &[&f.id()]));
                     self.accept_incoming(r);
                 } else if f.auto_connect {
@@ -576,7 +576,7 @@ impl App {
             }
             Event::FriendRequest(id) => crate::notify::toast(&tlf("{} wants to be friends", &[&id]), &tl("Open Kinlink to accept.")),
             Event::GuestConnect { from, name, req, eph, addrs, mouse, keyboard, gamepad } => {
-                let r = IncomingReq { from, name: name.clone(), req, eph, addrs, at: Instant::now(), guest: Some(Perms { mouse, keyboard, gamepad }) };
+                let r = IncomingReq { from, name: name.clone(), req, eph, addrs, at: Instant::now(), guest: Some(Perms { mouse, keyboard, gamepad, hide_screen: false }) };
                 if self.host.is_none() {
                     self.decline_incoming(&r, "isn't accepting connections right now");
                 } else {
@@ -1835,7 +1835,7 @@ impl App {
                                             let mut g = f.clone();
                                             (g.allow_mouse, g.allow_keyboard) = (v, v);
                                             if let Some(h) = &self.host {
-                                                h.set_perms(&g.id(), Perms { mouse: v, keyboard: v, gamepad: g.allow_gamepad });
+                                                h.set_perms(&g.id(), Perms { mouse: v, keyboard: v, gamepad: g.allow_gamepad, hide_screen: g.hide_screen });
                                             }
                                             sig.update(g);
                                         }
@@ -1897,11 +1897,6 @@ impl App {
                                     }
                                 });
                             });
-                            if t::switch(ui, &mut self.s.hide_screen, &tr("Make screen hidden")) {
-                                crate::privacy::set_enabled(self.s.hide_screen);
-                                self.s.save();
-                            }
-                            ui.label(RichText::new(tr("While guests are connected, this PC's monitors go black. Guests still see everything.")).size(11.5).color(t::MUTED()));
                             if !st.clients.is_empty() {
                                 t::section(ui, &tr("Guests"));
                                 t::card().show(ui, |ui| {
@@ -2038,7 +2033,7 @@ impl App {
                                     let host = self.host.as_ref().map(|h| h.handle());
                                     if ui.add_enabled(host.is_some(), egui::Button::new(tr("Watch party link"))).on_hover_text(tr("Up to 8 people watch your screen from their browsers at once (no control).")).clicked() {
                                         if let Some(h) = host {
-                                            let link = h.web_link(Perms { mouse: false, keyboard: false, gamepad: false }, true);
+                                            let link = h.web_link(Perms::default(), true);
                                             ui.ctx().copy_text(link);
                                             self.toast(tl("Watch party link copied: up to 8 people can watch for 3 hours."));
                                         }
@@ -2503,6 +2498,7 @@ impl App {
                         t::switch(ui, &mut g.allow_mouse, &tr("Mouse"));
                         t::switch(ui, &mut g.allow_keyboard, &tr("Keyboard"));
                         t::switch(ui, &mut g.allow_gamepad, &tr("Controller"));
+                        t::switch(ui, &mut g.hide_screen, &tr("Privacy mode (my screen goes black)"));
                         t::switch(ui, &mut g.auto_connect, &tr("Connect without asking"));
                         ui.label(RichText::new(tr("All three off = spectator (view only)")).size(11.0).color(t::MUTED()));
                         ui.label(RichText::new(trf("Safety code: {}", &[&sig.safety_code(&f.public)])).size(11.5).color(t::SOFT()))
@@ -2521,7 +2517,7 @@ impl App {
                 }
                 if g != f {
                     if let Some(h) = &self.host {
-                        h.set_perms(&g.id(), Perms { mouse: g.allow_mouse, keyboard: g.allow_keyboard, gamepad: g.allow_gamepad });
+                        h.set_perms(&g.id(), Perms { mouse: g.allow_mouse, keyboard: g.allow_keyboard, gamepad: g.allow_gamepad, hide_screen: g.hide_screen });
                     }
                     sig.update(g);
                 }

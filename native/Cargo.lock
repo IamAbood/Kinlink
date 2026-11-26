@@ -3258,7 +3258,7 @@ dependencies = [
 
 [[package]]
 name = "pclone"
-version = "0.34.0-beta"
+version = "0.34.1-beta"
 dependencies = [
  "aes-gcm",
  "anyhow",
