@@ -16,6 +16,8 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+use windows::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED};
+use windows::Win32::UI::Input::KeyboardAndMouse::MOUSEEVENTF_MOVE;
 
 pub const MAX_GUESTS: usize = 8;
 
@@ -850,6 +852,7 @@ fn video_loop(sh: Arc<Shared>) {
     // Lock screen / UAC support (if the helper service is installed).
     let (mut secure, mut last_check, mut last_connect) = (false, Instant::now() - Duration::from_secs(10), Instant::now() - Duration::from_secs(10));
     let (mut fw, mut fh) = (0usize, 0usize);
+    let (mut awake, mut last_nudge) = (false, Instant::now() - Duration::from_secs(60));
 
     while !sh.stop.load(SeqCst) {
         let targets: Vec<(SocketAddr, usize, Arc<Cipher>)> = sh.sessions.lock().unwrap().iter().map(|s| (s.addr, s.sock, s.cipher.clone())).collect();
@@ -865,8 +868,20 @@ fn video_loop(sh: Arc<Shared>) {
             sent_shape = u32::MAX;
             *sh.helper.lock().unwrap() = None; // only talk to the helper during sessions
             secure = false;
+            if awake {
+                awake = false;
+                crate::privacy::set_guests(false);
+                unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
+            }
             thread::sleep(Duration::from_millis(50));
             continue;
+        }
+        if !awake {
+            // Keep the screen on while guests watch: otherwise the lock screen turns the display
+            // off after a minute and guests only see black.
+            awake = true;
+            crate::privacy::set_guests(true);
+            unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED) };
         }
         // Keep a helper link while guests are connected; ask it whether the secure desktop is up.
         if sh.helper.lock().unwrap().is_none() && last_connect.elapsed() > Duration::from_secs(3) {
@@ -891,6 +906,15 @@ fn video_loop(sh: Arc<Shared>) {
         }
         if secure {
             // Lock screen / UAC prompt: only the SYSTEM helper can see it.
+            if last_nudge.elapsed() > Duration::from_secs(20) {
+                // A 1 px wiggle wakes a display that's already off and resets the lock-screen timer.
+                last_nudge = Instant::now();
+                use crate::syshelper::RawIn;
+                let mv = |d| RawIn::Mouse { dx: d, dy: 0, data: 0, flags: MOUSEEVENTF_MOVE.0 };
+                if let Some(l) = sh.helper.lock().unwrap().as_mut() {
+                    let _ = l.input(vec![mv(1), mv(-1)]);
+                }
+            }
             let mon = sh.monitor.load(SeqCst);
             let got = sh.helper.lock().unwrap().as_mut().map(|l| l.frame(mon));
             match got {
@@ -1161,6 +1185,7 @@ fn video_loop(sh: Arc<Shared>) {
             (n_frames, n_bytes, enc_time, tick) = (0, 0, Duration::ZERO, Instant::now());
         }
     }
+    crate::privacy::set_guests(false);
 }
 
 // ---------------------------------------------------------------- audio / clipboard / upnp

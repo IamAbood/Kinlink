@@ -6,6 +6,8 @@ pub fn get(en: &str) -> Option<&'static str> {
         "Friends" => "الأصدقاء",
         "On this network" => "على هذه الشبكة",
         "Guests see" => "يرى الضيوف",
+        "Make screen hidden" => "إخفاء الشاشة",
+        "While guests are connected, this PC's monitors go black. Guests still see everything." => "أثناء اتصال الضيوف تصبح شاشات هذا الكمبيوتر سوداء. ويبقى الضيوف يرون كل شيء.",
         "The whole screen" => "الشاشة كاملة",
         "This PC" => "هذا الجهاز",
         "Files" => "الملفات",

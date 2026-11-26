@@ -234,7 +234,7 @@ pub struct App {
 impl App {
     pub fn new(proxy: EventLoopProxy<()>, start_minimized: bool, connect_on_start: Option<String>) -> Self {
         Self {
-            s: Settings::load(),
+            s: { let s = Settings::load(); crate::privacy::set_enabled(s.hide_screen); s },
             proxy: Arc::new(Mutex::new(proxy)),
             gfx: None,
             egui_ctx: egui::Context::default(),
@@ -1897,6 +1897,11 @@ impl App {
                                     }
                                 });
                             });
+                            if t::switch(ui, &mut self.s.hide_screen, &tr("Make screen hidden")) {
+                                crate::privacy::set_enabled(self.s.hide_screen);
+                                self.s.save();
+                            }
+                            ui.label(RichText::new(tr("While guests are connected, this PC's monitors go black. Guests still see everything.")).size(11.5).color(t::MUTED()));
                             if !st.clients.is_empty() {
                                 t::section(ui, &tr("Guests"));
                                 t::card().show(ui, |ui| {

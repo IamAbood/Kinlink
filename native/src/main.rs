@@ -36,6 +36,7 @@ mod stun;
 mod theme;
 mod syshelper;
 mod pkg;
+mod privacy;
 mod updater;
 mod web;
 mod games;
@@ -95,6 +96,9 @@ fn main() {
             println!("{line}");
         }
         return;
+    }
+    if args.iter().any(|a| a == "--privacytest") {
+        std::process::exit(privacy::selftest());
     }
     if args.iter().any(|a| a == "--helpertest") {
         std::process::exit(helpertest());
