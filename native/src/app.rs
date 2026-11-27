@@ -165,6 +165,7 @@ pub struct App {
     room_new: Option<(String, Vec<Pub>)>,
     /// The profile picture picker is open.
     pic_pick: bool,
+    show_qr: bool,
     /// Mini game with a friend (one at a time), and whether the game picker is open in the chat.
     game: Option<crate::minigames::Game>,
     game_pick: bool,
@@ -262,6 +263,7 @@ impl App {
             room_open: None,
             room_new: None,
             pic_pick: std::env::var_os("PCLONE_PICS").is_some(), // screenshot tests
+            show_qr: std::env::var_os("PCLONE_QR").is_some(), // screenshot tests
             game: None,
             game_pick: false,
             chat_draft: String::new(),
@@ -1595,6 +1597,9 @@ impl App {
                                     ui.ctx().copy_text(sig.id());
                                     self.toast(tl("Your ID was copied. Send it to a friend so they can add you."));
                                 }
+                                if t::icon_button(ui, Icon::Qr, &tr("Show a QR code: on your phone, open Kinlink and tap Scan"), self.show_qr).clicked() {
+                                    self.show_qr = !self.show_qr;
+                                }
                             });
                         });
                         ui.horizontal(|ui| {
@@ -1608,6 +1613,9 @@ impl App {
                             ui.label(RichText::new(name).font(egui::FontId::new(14.0, t::bold())));
                             ui.label(RichText::new(format!("#{tag}")).font(egui::FontId::new(14.0, t::bold())).color(t::ACCENT_SOFT()));
                         });
+                        if self.show_qr {
+                            t::qr(ui, &sig.id(), 150.0);
+                        }
                         if self.pic_pick {
                             // Pick a picture (0 = first letter); friends see it too.
                             let mut chosen = None;

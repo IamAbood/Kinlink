@@ -164,6 +164,7 @@ pub enum Icon {
     Shield,
     Keyboard,
     Gamepad,
+    Qr,
 }
 
 /// Draws a small line icon centered in `r`.
@@ -311,6 +312,29 @@ pub fn icon(p: &Painter, r: Rect, i: Icon, color: Color32) {
             p.rect_stroke(Rect::from_min_max(c(9.0, 2.0), c(15.0, 14.0)), 3.0 * s, st, egui::StrokeKind::Middle);
             arc(12.0, 10.0, 7.0, 0.0, 180.0);
             line((12.0, 17.0), (12.0, 22.0));
+        }
+        Icon::Qr => {
+            for (x, y) in [(3.0, 3.0), (14.0, 3.0), (3.0, 14.0)] {
+                p.rect_stroke(Rect::from_min_max(c(x, y), c(x + 7.0, y + 7.0)), 1.0 * s, st, egui::StrokeKind::Middle);
+            }
+            p.rect_filled(Rect::from_min_max(c(15.0, 15.0), c(21.0, 21.0)), 1.0 * s, color);
+        }
+    }
+}
+
+/// Draws `text` as a QR code (black on white with a quiet zone), `size` points wide.
+pub fn qr(ui: &mut egui::Ui, text: &str, size: f32) {
+    let Ok(code) = qrcode::QrCode::new(text.as_bytes()) else { return };
+    let n = code.width();
+    let (r, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(r, 6.0, Color32::WHITE);
+    let cell = size / (n + 8) as f32; // 4-cell quiet zone each side
+    let o = r.min + egui::vec2(4.0 * cell, 4.0 * cell);
+    for (i, c) in code.to_colors().iter().enumerate() {
+        if *c == qrcode::Color::Dark {
+            let m = o + egui::vec2((i % n) as f32 * cell, (i / n) as f32 * cell);
+            p.rect_filled(Rect::from_min_size(m, egui::vec2(cell + 0.5, cell + 0.5)), 0.0, Color32::BLACK);
         }
     }
 }
@@ -569,4 +593,29 @@ pub fn para(ui: &mut egui::Ui, text: &str, size: f32, color: Color32) {
         lines.push(cur);
     }
     ui.add(egui::Label::new(egui::RichText::new(crate::rtl::show(&lines.join("\n"))).size(size).color(color)).wrap_mode(egui::TextWrapMode::Extend));
+}
+
+#[cfg(test)]
+mod tests {
+    /// The friend ID QR (as t::qr draws it, 3 px per cell) reads back with the phone's decoder.
+    #[test]
+    fn qr_roundtrip() {
+        let id = "abod#7105-E3W30P";
+        let code = qrcode::QrCode::new(id.as_bytes()).unwrap();
+        let (n, k) = (code.width(), 3);
+        let w = (n + 8) * k;
+        let mut px = vec![255u8; w * w];
+        for (i, c) in code.to_colors().iter().enumerate() {
+            if *c == qrcode::Color::Dark {
+                for dy in 0..k {
+                    for dx in 0..k {
+                        px[((i / n + 4) * k + dy) * w + (i % n + 4) * k + dx] = 0;
+                    }
+                }
+            }
+        }
+        let mut img = rqrr::PreparedImage::prepare_from_greyscale(w, w, |x, y| px[y * w + x]);
+        let got = img.detect_grids().into_iter().find_map(|g| g.decode().ok().map(|(_, s)| s));
+        assert_eq!(got.as_deref(), Some(id));
+    }
 }

@@ -41,6 +41,7 @@ mod settings;
 mod voice;
 mod mic;
 mod gamepad;
+mod scan;
 
 mod app;
 

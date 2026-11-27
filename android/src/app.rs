@@ -87,6 +87,9 @@ pub struct App {
     /// Pinch zoom (1 = whole screen); the view follows the cursor when zoomed in.
     zoom: f32,
     g: Gesture,
+    /// The QR scanner while it runs (Friends → Scan), and its preview texture.
+    scan: Option<crate::scan::Scanner>,
+    scan_tex: Option<egui::TextureHandle>,
 }
 
 impl App {
@@ -116,6 +119,8 @@ impl App {
             started: Instant::now(),
             zoom: 1.0,
             g: Gesture::default(),
+            scan: None,
+            scan_tex: None,
         };
         crate::theme::apply(&app.ctx);
         app.ctx.global_style_mut(|s| {
@@ -573,14 +578,60 @@ or have permission to use."), 11.5, t::MUTED());
                         }
                     });
                 }
+                // QR scan: the PC shows it under Your ID.
+                let done = self.scan.as_ref().and_then(|s| s.found.lock().unwrap().take());
+                if let Some(r) = done {
+                    self.scan = None;
+                    self.scan_tex = None;
+                    match r {
+                        Ok(id) => {
+                            let id = id.trim().to_string();
+                            self.message = Some(match sig.add_friend(&id) {
+                                Ok(()) => tlf("Request sent to {}", &[&id]),
+                                Err(e) => e,
+                            });
+                        }
+                        Err(e) if !e.is_empty() => self.message = Some(e),
+                        Err(_) => {}
+                    }
+                }
+                if let Some(s) = &self.scan {
+                    if let Some((w, h, px)) = s.frame.lock().unwrap().take() {
+                        let img = egui::ColorImage::from_gray([w, h], &px);
+                        match &mut self.scan_tex {
+                            Some(tex) => tex.set(img, egui::TextureOptions::LINEAR),
+                            None => self.scan_tex = Some(ui.ctx().load_texture("scan", img, egui::TextureOptions::LINEAR)),
+                        }
+                    }
+                    t::para(ui, &tl("Point the camera at the QR code on your PC (the QR button next to Your ID)."), 13.0, t::SOFT());
+                    if let Some(tex) = &self.scan_tex {
+                        let sz = tex.size_vec2();
+                        let w = ui.available_width().min(300.0 * sz.x / sz.y);
+                        ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(w, w * sz.y / sz.x)));
+                    } else {
+                        ui.spinner();
+                    }
+                    if ui.button(tr("Cancel")).clicked() {
+                        self.scan = None;
+                        self.scan_tex = None;
+                    }
+                }
                 ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut self.add_input).hint_text(tr("Add a friend: name#1234-ABCDEF")).desired_width(ui.available_width() - 90.0).margin(egui::vec2(12.0, 10.0)));
+                    ui.add(egui::TextEdit::singleline(&mut self.add_input).hint_text(tr("Add a friend: name#1234-ABCDEF")).desired_width(ui.available_width() - 170.0).margin(egui::vec2(12.0, 10.0)));
                     if t::primary(ui, &tr("Add"), Some(Icon::Plus), true).clicked() {
                         self.message = Some(match sig.add_friend(self.add_input.trim()) {
                             Ok(()) => tlf("Request sent to {}", &[self.add_input.trim()]),
                             Err(e) => e,
                         });
                         self.add_input.clear();
+                    }
+                    if self.scan.is_none() && ui.add(egui::Button::new(tr("Scan")).min_size(egui::vec2(70.0, 40.0))).clicked() {
+                        if crate::mic::ensure_perm("android.permission.CAMERA") {
+                            self.message = None;
+                            self.scan = Some(crate::scan::start(self.waker()));
+                        } else {
+                            self.message = Some(tl("Allow the camera, then tap Scan again"));
+                        }
                     }
                 });
                 for (name, public) in sig.incoming() {

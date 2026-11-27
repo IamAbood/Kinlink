@@ -5,12 +5,17 @@ use jni::{jni_sig, jni_str, JavaVM};
 /// True if the microphone is already allowed. Otherwise shows Android's "Allow Kinlink to record
 /// audio?" prompt and returns false (tap Mic again after allowing).
 pub fn ensure_mic() -> bool {
+    ensure_perm("android.permission.RECORD_AUDIO")
+}
+
+/// True if the permission is already allowed; otherwise shows Android's prompt and returns false.
+pub fn ensure_perm(name: &str) -> bool {
     let ctx = ndk_context::android_context();
     let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) };
     let r: Result<bool, jni::errors::Error> = vm.attach_current_thread(|env| {
         // The activity is a global reference owned by the app; it's only borrowed here.
         let activity = unsafe { JObject::from_raw(env, ctx.context().cast()) };
-        let perm = env.new_string("android.permission.RECORD_AUDIO")?;
+        let perm = env.new_string(name)?;
         let granted = env
             .call_method(&activity, jni_str!("checkSelfPermission"), jni_sig!("(Ljava/lang/String;)I"), &[JValue::Object(&perm)])?
             .i()?
@@ -22,7 +27,7 @@ pub fn ensure_mic() -> bool {
         Ok(granted)
     });
     r.unwrap_or_else(|e| {
-        log::error!("microphone permission: {e}");
+        log::error!("{name} permission: {e}");
         false
     })
 }

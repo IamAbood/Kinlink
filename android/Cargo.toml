@@ -1,6 +1,6 @@
 [package]
 name = "pclone-android"
-version = "0.34.1-beta"
+version = "0.35.0-beta"
 license = "MIT"
 authors = ["Abdulkareem Alsaou"]
 edition = "2024"
@@ -37,6 +37,10 @@ log = "0.4"
 jni = "0.22"
 ndk-context = "0.1"
 android_logger = "0.15"
+qrcode = { version = "0.15", default-features = false, features = ["std"] }
+rqrr = { version = "0.11", default-features = false }
+ndk = { version = "0.9", features = ["media"] }
+ndk-sys = "0.6"
 
 [package.metadata.android]
 package = "com.parsecclone.app"
@@ -65,6 +69,9 @@ name = "android.permission.REQUEST_INSTALL_PACKAGES"
 
 [[package.metadata.android.uses_permission]]
 name = "android.permission.POST_NOTIFICATIONS"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.CAMERA"
 
 [package.metadata.android.application]
 label = "Kinlink"
